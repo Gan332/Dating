@@ -124,8 +124,9 @@ jobs:
         run: flutter test
 
       # 一次构建同时产出 universal 与单 ABI 包（ABI 拆分配在 build.gradle.kts）。
+      # --target-platform 限定引擎只打包 arm/arm64，否则 universal 会混进 x86_64（约 +20 MB）。
       - name: Build release APKs
-        run: flutter build apk --release
+        run: flutter build apk --release --target-platform android-arm,android-arm64
 
       # AAB：上架后由商店按设备 ABI/密度分发；arm + arm64 覆盖新旧设备。
       - name: Build App Bundle
