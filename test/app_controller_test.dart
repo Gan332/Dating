@@ -350,6 +350,7 @@ void main() {
     expect(json, contains('"settings"'));
     expect(json, contains('"seed": "amber"'));
 
+    SharedPreferences.setMockInitialValues({});
     final other = AppController(
       store: _FakeStore(),
       reminders: _FakeReminders(),

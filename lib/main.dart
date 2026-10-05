@@ -93,7 +93,7 @@ class _StartupView extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              CircularProgressIndicator(),
+              M3ELoadingIndicator(size: 42),
               SizedBox(height: 18),
               Text('正在准备本地数据…'),
             ],

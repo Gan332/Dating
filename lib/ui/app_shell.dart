@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:lunar/lunar.dart';
 import 'package:material_3_expressive/material_3_expressive.dart';
@@ -8,6 +10,7 @@ import '../core/calendar_engine.dart';
 import '../data/holiday_catalog.dart';
 import '../models/app_settings.dart';
 import '../models/countdown_event.dart';
+import '../core/year_progress.dart';
 import 'day_override_editor.dart';
 import 'event_editor.dart';
 
@@ -220,7 +223,15 @@ class _AppShellState extends State<AppShell> {
               onRetry: widget.onRetry,
             ),
           Expanded(
-            child: SafeArea(child: IndexedStack(index: _tab, children: pages)),
+            child: SafeArea(
+              child: IndexedStack(
+                index: _tab,
+                children: [
+                  for (var index = 0; index < pages.length; index++)
+                    _TabTransition(visible: index == _tab, child: pages[index]),
+                ],
+              ),
+            ),
           ),
         ],
       ),
@@ -423,6 +434,8 @@ class _HomePageState extends State<HomePage> {
                 occurrence: upcoming.isEmpty ? null : upcoming.first,
                 onAdd: onAdd,
               ),
+              const SizedBox(height: 12),
+              _Entrance(index: 1, child: _YearCountdownCard(now: now)),
               const SizedBox(height: 20),
               Row(
                 children: [
@@ -463,16 +476,20 @@ class _HomePageState extends State<HomePage> {
               if (upcoming.isEmpty)
                 _EmptyEvents(onAdd: onAdd)
               else
-                for (final item in upcoming.take(8))
+                for (final (index, item) in upcoming.take(8).indexed)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 10),
-                    child: _OccurrenceTile(
-                      occurrence: item,
-                      selectionMode: _selection.active,
-                      selected: _selection.contains(item),
-                      onEdit: () => _handleTap(item),
-                      onLongPress: () => setState(() => _selection.select(item)),
-                      onDelete: () => widget.onDelete(item),
+                    child: _Entrance(
+                      index: index + 2,
+                      child: _OccurrenceTile(
+                        occurrence: item,
+                        selectionMode: _selection.active,
+                        selected: _selection.contains(item),
+                        onEdit: () => _handleTap(item),
+                        onLongPress: () =>
+                            setState(() => _selection.select(item)),
+                        onDelete: () => widget.onDelete(item),
+                      ),
                     ),
                   ),
               const SizedBox(height: 8),
@@ -636,16 +653,21 @@ class _HeroCountdown extends StatelessWidget {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    Text(
-                      item.daysRemaining == 0
-                          ? '今天'
-                          : item.daysRemaining.toString(),
-                      style: Theme.of(context).textTheme.displayLarge?.copyWith(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w800,
-                            height: 1,
-                            letterSpacing: -2,
-                          ),
+                    AnimatedSwitcher(
+                      duration: M3EMotion.medium1,
+                      child: Text(
+                        item.daysRemaining == 0
+                            ? '今天'
+                            : item.daysRemaining.toString(),
+                        key: ValueKey(item.daysRemaining),
+                        style:
+                            Theme.of(context).textTheme.displayLarge?.copyWith(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w800,
+                                  height: 1,
+                                  letterSpacing: -2,
+                                ),
+                      ),
                     ),
                     if (item.daysRemaining > 0)
                       Padding(
@@ -988,35 +1010,43 @@ class _ImportantDaysPageState extends State<ImportantDaysPage> {
                     count: upcoming.length,
                   ),
                   const SizedBox(height: 10),
-                  for (final item in upcoming) ...[
-                    _OccurrenceTile(
-                      occurrence: item,
-                      selectionMode: _selection.active,
-                      selected: _selection.contains(item),
-                      onEdit: () => _handleTap(item),
-                      onLongPress: () =>
-                          setState(() => _selection.select(item)),
-                      onDelete: () => widget.onDelete(item),
+                  for (final (index, item) in upcoming.indexed)
+                    _Entrance(
+                      index: index,
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: _OccurrenceTile(
+                          occurrence: item,
+                          selectionMode: _selection.active,
+                          selected: _selection.contains(item),
+                          onEdit: () => _handleTap(item),
+                          onLongPress: () =>
+                              setState(() => _selection.select(item)),
+                          onDelete: () => widget.onDelete(item),
+                        ),
+                      ),
                     ),
-                    const SizedBox(height: 10),
-                  ],
                 ],
                 if (past.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   _SectionHeading(title: '已经走过', count: past.length),
                   const SizedBox(height: 10),
-                  for (final item in past) ...[
-                    _OccurrenceTile(
-                      occurrence: item,
-                      selectionMode: _selection.active,
-                      selected: _selection.contains(item),
-                      onEdit: () => _handleTap(item),
-                      onLongPress: () =>
-                          setState(() => _selection.select(item)),
-                      onDelete: () => widget.onDelete(item),
+                  for (final (index, item) in past.indexed)
+                    _Entrance(
+                      index: index,
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: _OccurrenceTile(
+                          occurrence: item,
+                          selectionMode: _selection.active,
+                          selected: _selection.contains(item),
+                          onEdit: () => _handleTap(item),
+                          onLongPress: () =>
+                              setState(() => _selection.select(item)),
+                          onDelete: () => widget.onDelete(item),
+                        ),
+                      ),
                     ),
-                    const SizedBox(height: 10),
-                  ],
                 ],
               ],
             ],
@@ -1937,3 +1967,219 @@ Future<bool> confirmBulkDelete(BuildContext context, int count) async =>
       ),
     ) ??
     false;
+
+/// 切换底部导航时的淡入淡出，页面状态仍由 IndexedStack 保留。
+class _TabTransition extends StatefulWidget {
+  const _TabTransition({required this.visible, required this.child});
+
+  final bool visible;
+  final Widget child;
+
+  @override
+  State<_TabTransition> createState() => _TabTransitionState();
+}
+
+class _TabTransitionState extends State<_TabTransition>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: M3EMotion.medium2,
+    value: widget.visible ? 1 : 0,
+  );
+
+  @override
+  void didUpdateWidget(covariant _TabTransition oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.visible && !oldWidget.visible) {
+      _controller.forward();
+    } else if (!widget.visible && oldWidget.visible) {
+      _controller.reverse();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final curve = CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+    return FadeTransition(
+      opacity: curve,
+      child: SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(0, 0.04),
+          end: Offset.zero,
+        ).animate(curve),
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+/// 列表逐项入场：按序号错开，整屏看起来是一段连贯的动效。
+class _Entrance extends StatefulWidget {
+  const _Entrance({required this.index, required this.child});
+
+  final int index;
+  final Widget child;
+
+  @override
+  State<_Entrance> createState() => _EntranceState();
+}
+
+class _EntranceState extends State<_Entrance>
+    with SingleTickerProviderStateMixin {
+  /// 序号过大时不再等待，避免末尾出现明显延迟。
+  static const int maxDelayIndex = 12;
+
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: M3EMotion.long2,
+    value: widget.index > maxDelayIndex ? 1 : 0,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.index > maxDelayIndex) return;
+    unawaited(
+      Future<void>.delayed(const Duration(milliseconds: 60) +
+          Duration(milliseconds: 45 * widget.index), () {
+        if (mounted) _controller.forward();
+      }),
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final curve = CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic);
+    return FadeTransition(
+      opacity: curve,
+      child: SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(0, 0.08),
+          end: Offset.zero,
+        ).animate(curve),
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+/// 年度倒计时：今年走到第几天、还剩多少天。
+class _YearCountdownCard extends StatelessWidget {
+  const _YearCountdownCard({required this.now});
+
+  final DateTime now;
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = YearProgress.of(now);
+    final colors = Theme.of(context).colorScheme;
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 0, end: progress.progress),
+      duration: M3EMotion.extraLong1,
+      curve: Curves.easeOutCubic,
+      builder: (context, value, _) {
+        return Card(
+          elevation: 0,
+          color: colors.surfaceContainerLow,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('${progress.year} 年',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelMedium
+                                  ?.copyWith(
+                                    color: colors.onSurfaceVariant,
+                                  )),
+                          const SizedBox(height: 6),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.baseline,
+                            textBaseline: TextBaseline.alphabetic,
+                            children: [
+                              Text('${progress.daysLeft}',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .displaySmall
+                                      ?.copyWith(
+                                        fontWeight: FontWeight.w800,
+                                        color: colors.primary,
+                                        height: 1,
+                                      )),
+                              const SizedBox(width: 6),
+                              Text('天后跨年',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .titleMedium
+                                      ?.copyWith(
+                                        color: colors.onSurfaceVariant,
+                                      )),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        const Icon(Icons.calendar_today_rounded, size: 18),
+                        const SizedBox(height: 6),
+                        Text(
+                          '第 ${progress.dayOfYear}/${progress.totalDays} 天',
+                          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                                color: colors.onSurfaceVariant,
+                              ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(999),
+                  child: LinearProgressIndicator(
+                    value: value,
+                    minHeight: 8,
+                    backgroundColor: colors.surfaceContainerHighest,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  progress.daysLeft == 0 ? '今天就是今年最后一天' : '珍惜剩下的每一天',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: colors.onSurfaceVariant,
+                      ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
