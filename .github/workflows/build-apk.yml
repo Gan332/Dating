@@ -127,9 +127,9 @@ jobs:
       - name: Build release APKs
         run: flutter build apk --release
 
-      # AAB：上架后由商店按设备 ABI/密度分发。
+      # AAB：上架后由商店按设备 ABI/密度分发；arm + arm64 覆盖新旧设备。
       - name: Build App Bundle
-        run: flutter build appbundle --release
+        run: flutter build appbundle --release --target-platform android-arm,android-arm64
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v7

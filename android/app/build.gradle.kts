@@ -20,6 +20,13 @@ val rustTriples = mapOf(
     "x86_64" to "x86_64-linux-android",
 )
 
+/**
+ * AGP 不允许构建 AAB 时同时启用多 APK 拆包（issuetracker 402800800），
+ * 所以按任务名判断：assemble 用拆包，bundle 关掉拆包。
+ */
+val isBundleBuild =
+    gradle.startParameter.taskNames.any { it.contains("bundle", ignoreCase = true) }
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -54,7 +61,7 @@ android {
     // 所以同时产出 universal 与单 ABI 包；上架 AAB 时商店也会按 ABI 再分发。
     splits {
         abi {
-            isEnable = true
+            isEnable = !isBundleBuild
             reset()
             include(*targetAbis.toTypedArray())
             isUniversalApk = true
