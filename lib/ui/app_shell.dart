@@ -1062,7 +1062,6 @@ class _ImportantDaysPageState extends State<ImportantDaysPage> {
       ],
         ),
       );
-    );
   }
 
   void _handleTap(EventOccurrence item) {
@@ -2244,10 +2243,12 @@ class _YearCountdownCard extends StatelessWidget {
 
 /// 按下时轻微缩放，给卡片一点物理反馈；不影响水波纹。
 class _Pressable extends StatefulWidget {
-  const _Pressable({required this.child, this.scale = 0.97});
+  const _Pressable({required this.child});
+
+  /// 按下时缩到的比例。
+  static const double pressedScale = 0.97;
 
   final Widget child;
-  final double scale;
 
   @override
   State<_Pressable> createState() => _PressableState();
@@ -2264,7 +2265,7 @@ class _PressableState extends State<_Pressable> {
   @override
   Widget build(BuildContext context) {
     return AnimatedScale(
-      scale: _pressed ? widget.scale : 1,
+      scale: _pressed ? pressedScale : 1,
       duration: M3EMotion.short2,
       curve: Curves.easeOut,
       child: Listener(
