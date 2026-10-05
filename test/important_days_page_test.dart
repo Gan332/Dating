@@ -6,7 +6,7 @@ import 'package:daymark/models/day_override.dart';
 import 'package:daymark/models/holiday_data.dart';
 import 'package:daymark/services/reminder_service.dart';
 import 'package:daymark/ui/app_shell.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -151,7 +151,8 @@ Future<void> _pump(
 
 Finder _searchField() => find.byWidgetPredicate(
       (widget) =>
-          widget is TextField && widget.decoration?.hintText == '搜索名称或备注',
+          widget is TextField &&
+          widget.decoration?.hintText == '搜索名称、备注或节日',
       description: '搜索框',
     );
 

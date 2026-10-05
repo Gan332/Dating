@@ -355,7 +355,7 @@ void main() {
     BackupShareInvoker sharedOk() =>
         (params) async => const ShareResult('', ShareResultStatus.success);
 
-    test('导出会把原文按 UTF-8 交给分享面板，文件名与 MIME 类型都对', () async {
+    test('导出会把原文按 UTF-8 交给分享面板，标题带上文件名', () async {
       ShareParams? captured;
       final gateway = PluginBackupFileGateway(
         share: (params) async {
@@ -374,9 +374,12 @@ void main() {
       expect(finished, isTrue);
       final files = captured!.files!;
       expect(files, hasLength(1));
-      expect(files.single.name, 'daymark-backup-2026-10-05.json');
-      expect(files.single.mimeType, PluginBackupFileGateway.jsonMimeType);
+      // 内容是这里唯一真正要紧的东西：用户拿到的文件必须就是这份备份原文。
       expect(utf8.decode(await files.single.readAsBytes()), content);
+      // 文件名与标题由网关直接指定，钉住它们能防住有人把命名规则改掉。
+      // 不去断言 XFile.name：那是 cross_file 自己的规范化行为，不是我们控制的。
+      expect(captured!.title, 'daymark-backup-2026-10-05.json');
+      expect(captured!.subject, '拾日备份');
     });
 
     test('分享面板被关掉算没完成，其余状态都算完成', () async {

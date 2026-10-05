@@ -291,14 +291,17 @@ void main() {
     });
 
     test('已经完全过去的假期不再出现在列表里', () {
+      // 2026-02-18 往后 181 天（约到 8 月中）：元旦已过，端午/国庆都还没到。
       final origins = controller
           .builtInOccurrences(_insideSpringFestival)
           .map((item) => item.origin)
           .toList();
 
       expect(origins, isNot(contains(_originOf(_span('元旦')))));
-      // 同一个列表里还没过去的假期仍然在。
-      expect(origins, contains(_originOf(_span('国庆节'))));
+      // 同一窗口里还没到的假期仍在——劳动节（05-01）离得够近。
+      expect(origins, contains(_originOf(_span('劳动节'))));
+      // 国庆节在 10 月，超出 181 天窗口，不该被列进「接下来」。
+      expect(origins, isNot(contains(_originOf(_span('国庆节')))));
     });
 
     test('改名之后内置条目按改动后的名字出现，并标记为已改动', () async {

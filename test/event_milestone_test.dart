@@ -316,7 +316,7 @@ void main() {
       );
       expect(CalendarEngine.milestoneAnniversaryLabel(milestone), '');
       expect(CalendarEngine.milestoneCycleLabel(milestone), '第一次');
-      expect(CalendarEngine.milestoneSummary(milestone), '今天就是那一天');
+      expect(CalendarEngine.milestoneSummary(milestone), '今天就是这一天');
     });
 
     test('一次性事件只报已过天数，其余留空给界面跳过', () {

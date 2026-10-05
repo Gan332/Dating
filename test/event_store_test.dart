@@ -93,16 +93,18 @@ void main() {
 
   group('事件读写', () {
     test('allEvents 按日期升序返回', () async {
+      // 故意让 id 的字母顺序与日期顺序不一致，这样排序断言才有意义：
+      // id 排下来是 b, c, a，日期排下来是 a(03-05), c(07-01), b(12-31)。
+      await store.save(_event('b', date: '2026-12-31'));
       await store.save(_event('c', date: '2026-07-01'));
       await store.save(_event('a', date: '2026-03-05'));
-      await store.save(_event('b', date: '2026-12-31'));
 
       final events = await store.allEvents();
 
       expect(
         events.map((event) => event.id).toList(),
-        ['a', 'b', 'c'],
-        reason: '首页按日期排序展示，读出来的顺序必须就是日期顺序',
+        ['a', 'c', 'b'],
+        reason: '首页按日期排序展示，读出来的顺序必须就是日期顺序，而不是 id 顺序',
       );
     });
 
