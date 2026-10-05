@@ -65,7 +65,7 @@ class HolidayRepository {
           final snapshot = HolidaySnapshot.fromJson(decoded);
           if (snapshot != null) return snapshot;
         }
-        lastError = FormatException('数据格式无法识别');
+        lastError = const FormatException('数据格式无法识别');
       } catch (error) {
         lastError = error;
         debugPrint('拉取 $url 失败：$error');
@@ -85,7 +85,7 @@ class HolidayRepository {
           );
         }
       }
-      lastError = FormatException('公共接口数据格式无法识别');
+      lastError = const FormatException('公共接口数据格式无法识别');
     } catch (error) {
       lastError = error;
       debugPrint('拉取公共接口失败：$error');
