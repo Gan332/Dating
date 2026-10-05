@@ -51,17 +51,35 @@ val rustDirectory = rootProject.projectDir.parentFile.resolve("rust")
 val nativeLibraries = project.layout.projectDirectory.dir("src/main/jniLibs").asFile
 
 tasks.register<Exec>("buildRustAndroid") {
-    workingDir = rootProject.projectDir.parentFile
+    // cargo-ndk 在派发构建前会先在当前目录执行 `cargo metadata` 定位 package，
+    // 所以工作目录必须指向包含 Cargo.toml 的 rust/，不能只靠 --manifest-path
+    // （否则报 “could not find Cargo.toml in ... or any parent directory”）。
+    workingDir = rustDirectory
     commandLine(
         "cargo", "ndk",
         "-t", "arm64-v8a",
         "-t", "armeabi-v7a",
         "-t", "x86_64",
         "-o", nativeLibraries.absolutePath,
-        "build", "--release", "--manifest-path", rustDirectory.resolve("Cargo.toml").absolutePath,
+        "build", "--release",
     )
+    doLast {
+        val missing = listOf("arm64-v8a", "armeabi-v7a", "x86_64").filter { abi ->
+            val dir = nativeLibraries.resolve(abi)
+            dir.listFiles()?.none { it.name.endsWith(".so") } ?: true
+        }
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "cargo ndk 未在 ${nativeLibraries.absolutePath} 生成 .so: $missing",
+            )
+        }
+    }
 }
 
 tasks.named("preBuild").configure {
     dependsOn("buildRustAndroid")
 }
+
+// jniLibs 的合并/打包任务必须排在 Rust 产物生成之后，否则 APK 里会缺少 .so。
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
+    .configureEach { dependsOn("buildRustAndroid") }
