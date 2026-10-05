@@ -10,6 +10,9 @@ class EventOccurrence {
     required this.daysRemaining,
     this.event,
     this.subtitle = '',
+    this.origin,
+    this.overridden = false,
+    this.reminderDays = -1,
   });
 
   final String title;
@@ -17,9 +20,29 @@ class EventOccurrence {
   final int daysRemaining;
   final CountdownEvent? event;
   final String subtitle;
+
+  /// 内置条目的稳定标识；为空表示这条来自用户自己的记录。
+  final String? origin;
+
+  /// 用户是否改动过这条内置条目。
+  final bool overridden;
+
+  /// -1 表示不提醒。
+  final int reminderDays;
+
+  /// 是否可以改动：自己的记录，或内置条目。
+  bool get editable => event != null || origin != null;
 }
 
 class CalendarEngine {
+  /// 官方节假日区间的稳定标识。区间内某一天都指回同一个内置条目。
+  static String holidayOrigin(String name, DateTime start) =>
+      'holiday:$name:${CountdownEvent.dateKey(start)}';
+
+  /// 传统节日的稳定标识。
+  static String festivalOrigin(DateTime date, String name) =>
+      'festival:${CountdownEvent.dateKey(date)}:$name';
+
   static DateTime dateOnly(DateTime date) =>
       DateTime(date.year, date.month, date.day);
 
@@ -87,6 +110,7 @@ class CalendarEngine {
       daysRemaining: daysBetween(today, date),
       event: event,
       subtitle: event.category,
+      reminderDays: event.reminderDays,
     );
   }
 

@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'data/event_store.dart';
 import 'models/countdown_event.dart';
+import 'models/day_override.dart';
 import 'services/reminder_service.dart';
 
 class AppController extends ChangeNotifier {
@@ -26,6 +27,7 @@ class AppController extends ChangeNotifier {
   final ReminderScheduler _reminders;
 
   List<CountdownEvent> _events = const [];
+  final Map<String, DayOverride> _overrides = {};
   bool _remindersEnabled = false;
   bool _ready = false;
   bool _loading = false;
@@ -38,6 +40,33 @@ class AppController extends ChangeNotifier {
 
   /// 启动过程中失败的原因；为空表示一切正常。
   String? get loadError => _loadError;
+
+  /// 用户对内置条目（官方节假日、传统节日）的改动，键是内置条目标识。
+  Map<String, DayOverride> get overrides => Map.unmodifiable(_overrides);
+
+  DayOverride? overrideFor(String origin) => _overrides[origin];
+
+  /// 需要发送提醒的条目：自己记录里开着提醒的，加上被改动后设了提醒的内置条目。
+  List<CountdownEvent> get _reminderCandidates {
+    final candidates = <CountdownEvent>[
+      for (final event in _events)
+        if (event.reminderDays >= 0) event,
+    ];
+    for (final override in _overrides.values) {
+      if (override.reminderDays < 0 || override.hidden) continue;
+      candidates.add(
+        CountdownEvent(
+          id: 'override:${override.origin}',
+          title: override.title,
+          date: override.date,
+          category: override.category,
+          note: override.note,
+          reminderDays: override.reminderDays,
+        ),
+      );
+    }
+    return candidates;
+  }
 
   Future<void> load() async {
     if (_loading) return;
@@ -65,13 +94,20 @@ class AppController extends ChangeNotifier {
     final preferences = await SharedPreferences.getInstance();
     _remindersEnabled = preferences.getBool('remindersEnabled') ?? false;
     _events = await _store.allEvents();
+    final overrides = await _store.allOverrides();
+    _overrides
+      ..clear()
+      ..addEntries(overrides.map((item) => MapEntry(item.origin, item)));
   }
 
   Future<void> _warmUpReminders() async {
     try {
       await _reminders.initialize();
       if (_remindersEnabled && _reminders.available) {
-        await _withTimeout(_reminders.scheduleEvents(_events), '重建提醒');
+        await _withTimeout(
+          _reminders.scheduleEvents(_reminderCandidates),
+          '重建提醒',
+        );
       }
     } catch (error, stack) {
       debugPrint('提醒预热失败，应用继续使用：$error\n$stack');
@@ -109,7 +145,10 @@ class AppController extends ChangeNotifier {
     await preferences.setBool('remindersEnabled', enabled);
     _remindersEnabled = enabled;
     if (enabled) {
-      await _withTimeout(_reminders.scheduleEvents(_events), '安排提醒');
+      await _withTimeout(
+        _reminders.scheduleEvents(_reminderCandidates),
+        '安排提醒',
+      );
     } else {
       await _withTimeout(_reminders.cancelAll(), '取消提醒');
     }
@@ -128,8 +167,50 @@ class AppController extends ChangeNotifier {
   Future<void> _refresh() async {
     _events = await _store.allEvents();
     if (_remindersEnabled) {
-      await _withTimeout(_reminders.scheduleEvents(_events), '重建提醒');
+      await _withTimeout(
+        _reminders.scheduleEvents(_reminderCandidates),
+        '重建提醒',
+      );
     }
     notifyListeners();
+  }
+
+  /// 保存对内置条目的改动。
+  Future<void> saveOverride(DayOverride override) async {
+    await _withTimeout(_store.saveOverride(override), '保存改动');
+    _overrides[override.origin] = override;
+    notifyListeners();
+    await _syncOverrideReminders();
+  }
+
+  /// 取消对内置条目的改动，恢复内置数据。
+  Future<void> restoreOverride(String origin) async {
+    await _withTimeout(_store.deleteOverrides([origin]), '恢复默认');
+    _overrides.remove(origin);
+    notifyListeners();
+    await _syncOverrideReminders();
+  }
+
+  /// 批量清除改动记录。
+  Future<void> restoreOverrides(List<String> origins) async {
+    if (origins.isEmpty) return;
+    await _withTimeout(_store.deleteOverrides(origins), '恢复默认');
+    for (final origin in origins) {
+      _overrides.remove(origin);
+    }
+    notifyListeners();
+    await _syncOverrideReminders();
+  }
+
+  Future<void> _syncOverrideReminders() async {
+    if (!_remindersEnabled) return;
+    try {
+      await _withTimeout(
+        _reminders.scheduleEvents(_reminderCandidates),
+        '重建提醒',
+      );
+    } catch (error, stack) {
+      debugPrint('改动后重建提醒失败：$error\n$stack');
+    }
   }
 }

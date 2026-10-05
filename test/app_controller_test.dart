@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:daymark/app_controller.dart';
 import 'package:daymark/data/event_store.dart';
 import 'package:daymark/models/countdown_event.dart';
+import 'package:daymark/models/day_override.dart';
 import 'package:daymark/services/reminder_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -40,6 +41,9 @@ class _FakeStore extends EventStore {
 
   @override
   Future<void> delete(String id) async {}
+
+  @override
+  Future<List<DayOverride>> allOverrides() async => const [];
 
   @override
   Future<int> importJson(String source) async => 0;

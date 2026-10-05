@@ -7,6 +7,7 @@ import '../app_controller.dart';
 import '../core/calendar_engine.dart';
 import '../data/holiday_catalog.dart';
 import '../models/countdown_event.dart';
+import 'day_override_editor.dart';
 import 'event_editor.dart';
 
 class AppShell extends StatefulWidget {
@@ -74,21 +75,104 @@ class _AppShellState extends State<AppShell> {
     );
   }
 
+  /// 统一入口：自带记录走完整编辑器，内置条目走改动面板。
+  Future<void> _editOccurrence(EventOccurrence item) async {
+    if (item.event case final event?) {
+      await _editEventRecord(event);
+      return;
+    }
+    final origin = item.origin;
+    if (origin == null) return;
+    final result = await showModalBottomSheet<DayOverrideResult>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => DayOverrideEditor(
+        origin: origin,
+        title: item.title,
+        date: item.date,
+        subtitle: item.subtitle,
+        overridden: item.overridden,
+      ),
+    );
+    if (result == null) return;
+    try {
+      if (result.restore) {
+        await widget.controller.restoreOverride(origin);
+      } else {
+        await widget.controller.saveOverride(result.override);
+      }
+    } catch (error) {
+      _showError('保存改动失败：$error');
+    }
+  }
+
+  /// 编辑一条自带记录。
+  Future<void> _editEventRecord(CountdownEvent event) async {
+    final result = await showModalBottomSheet<CountdownEvent>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => EventEditor(event: event),
+    );
+    if (result == null) return;
+    try {
+      await widget.controller.saveEvent(result);
+    } catch (error) {
+      _showError('保存失败：$error');
+    }
+  }
+
+  /// 内置条目的「删除」即清除改动，回到公布时的状态。
+  Future<void> _deleteOccurrence(EventOccurrence item) async {
+    if (item.event case final event?) {
+      await _deleteEvent(event);
+      return;
+    }
+    final origin = item.origin;
+    if (origin == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('恢复内置数据？'),
+        content: Text('「${item.title}」会回到公布时的名称、日期与提醒设置。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('恢复默认'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await widget.controller.restoreOverride(origin);
+    } catch (error) {
+      _showError('恢复失败：$error');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final pages = [
       HomePage(
         controller: widget.controller,
         onAdd: () => _editEvent(),
-        onEdit: _editEvent,
-        onDelete: _deleteEvent,
+        onEdit: _editOccurrence,
+        onDelete: _deleteOccurrence,
       ),
-      CalendarPage(controller: widget.controller, onEdit: _editEvent),
+      CalendarPage(controller: widget.controller, onEdit: _editOccurrence),
       ImportantDaysPage(
         controller: widget.controller,
         onAdd: () => _editEvent(),
-        onEdit: _editEvent,
-        onDelete: _deleteEvent,
+        onEdit: _editOccurrence,
+        onDelete: _deleteOccurrence,
       ),
       SettingsPage(controller: widget.controller),
     ];
@@ -147,13 +231,14 @@ class HomePage extends StatelessWidget {
 
   final AppController controller;
   final VoidCallback onAdd;
-  final ValueChanged<CountdownEvent> onEdit;
-  final ValueChanged<CountdownEvent> onDelete;
+  final ValueChanged<EventOccurrence> onEdit;
+  final ValueChanged<EventOccurrence> onDelete;
 
   @override
   Widget build(BuildContext context) {
     final now = DateTime.now();
     final today = CalendarEngine.dateOnly(now);
+    final overrides = controller.overrides;
     final occurrences = <EventOccurrence>[];
     for (final event in controller.events) {
       final occurrence = CalendarEngine.nextOccurrence(event, today);
@@ -162,26 +247,40 @@ class HomePage extends StatelessWidget {
       }
     }
     for (final span in HolidayCatalog.spansForYear(today.year)) {
-      if (!span.end.isBefore(today)) {
-        final date = span.start.isBefore(today) ? today : span.start;
-        occurrences.add(EventOccurrence(
-          title: span.name,
-          date: date,
-          daysRemaining: CalendarEngine.daysBetween(today, date),
-          subtitle: '${HolidayCatalog.publishedYear} 官方假期',
-        ));
-      }
+      if (span.end.isBefore(today)) continue;
+      final origin = CalendarEngine.holidayOrigin(span.name, span.start);
+      final patch = overrides[origin];
+      if (patch?.hidden ?? false) continue;
+      final date = patch?.date ?? (span.start.isBefore(today) ? today : span.start);
+      occurrences.add(EventOccurrence(
+        title: patch?.title ?? span.name,
+        date: date,
+        daysRemaining: CalendarEngine.daysBetween(today, date),
+        subtitle: patch == null
+            ? '${HolidayCatalog.publishedYear} 官方假期'
+            : '${HolidayCatalog.publishedYear} 官方假期 · 已改动',
+        origin: origin,
+        overridden: patch != null,
+        reminderDays: patch?.reminderDays ?? -1,
+      ));
     }
     for (var offset = 0; offset <= 180; offset++) {
       final date = today.add(Duration(days: offset));
       final names = CalendarEngine.lunarFestivals(date).toSet();
       for (final name in names) {
         if (name.isEmpty) continue;
+        final origin = CalendarEngine.festivalOrigin(date, name);
+        final patch = overrides[origin];
+        if (patch?.hidden ?? false) continue;
+        final date2 = patch?.date ?? date;
         occurrences.add(EventOccurrence(
-          title: name,
-          date: date,
-          daysRemaining: offset,
-          subtitle: '传统节日',
+          title: patch?.title ?? name,
+          date: date2,
+          daysRemaining: CalendarEngine.daysBetween(today, date2),
+          subtitle: patch == null ? '传统节日' : '传统节日 · 已改动',
+          origin: origin,
+          overridden: patch != null,
+          reminderDays: patch?.reminderDays ?? -1,
         ));
       }
     }
@@ -304,14 +403,13 @@ class HomePage extends StatelessWidget {
                     padding: const EdgeInsets.only(bottom: 10),
                     child: _OccurrenceTile(
                       occurrence: item,
-                      onEdit: item.event == null ? null : () => onEdit(item.event!),
-                      onDelete:
-                          item.event == null ? null : () => onDelete(item.event!),
+                      onEdit: () => onEdit(item),
+                      onDelete: () => onDelete(item),
                     ),
                   ),
               const SizedBox(height: 8),
               Text(
-                '节假日安排仅展示已公布的官方年度数据。',
+                '节假日安排基于已公布的官方数据，点条目可自行改动。',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -505,7 +603,10 @@ class _OccurrenceTile extends StatelessWidget {
             EventRecurrence.solarYearly => ' · 公历每年',
             EventRecurrence.lunarYearly => ' · 农历每年',
           };
-    final subtitle = occurrence.subtitle + recurrenceLabel;
+    final reminderDays = occurrence.reminderDays;
+    final subtitle = occurrence.subtitle +
+        recurrenceLabel +
+        (reminderDays >= 0 ? ' · 已提醒' : '');
     return Card(
       margin: EdgeInsets.zero,
       elevation: 0,
@@ -586,9 +687,12 @@ class _OccurrenceTile extends StatelessWidget {
                     if (value == 'edit') onEdit?.call();
                     if (value == 'delete') onDelete?.call();
                   },
-                  itemBuilder: (context) => const [
-                    PopupMenuItem(value: 'edit', child: Text('编辑')),
-                    PopupMenuItem(value: 'delete', child: Text('删除')),
+                  itemBuilder: (context) => [
+                    const PopupMenuItem(value: 'edit', child: Text('编辑')),
+                    PopupMenuItem(
+                      value: 'delete',
+                      child: Text(occurrence.origin == null ? '删除' : '恢复默认'),
+                    ),
                   ],
                 ),
             ],
@@ -646,8 +750,8 @@ class ImportantDaysPage extends StatelessWidget {
 
   final AppController controller;
   final VoidCallback onAdd;
-  final ValueChanged<CountdownEvent> onEdit;
-  final ValueChanged<CountdownEvent> onDelete;
+  final ValueChanged<EventOccurrence> onEdit;
+  final ValueChanged<EventOccurrence> onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -718,12 +822,8 @@ class ImportantDaysPage extends StatelessWidget {
                   for (final item in upcoming) ...[
                     _OccurrenceTile(
                       occurrence: item,
-                      onEdit: item.event == null
-                          ? null
-                          : () => onEdit(item.event!),
-                      onDelete: item.event == null
-                          ? null
-                          : () => onDelete(item.event!),
+                      onEdit: () => onEdit(item),
+                      onDelete: () => onDelete(item),
                     ),
                     const SizedBox(height: 10),
                   ],
@@ -735,12 +835,8 @@ class ImportantDaysPage extends StatelessWidget {
                   for (final item in past) ...[
                     _OccurrenceTile(
                       occurrence: item,
-                      onEdit: item.event == null
-                          ? null
-                          : () => onEdit(item.event!),
-                      onDelete: item.event == null
-                          ? null
-                          : () => onDelete(item.event!),
+                      onEdit: () => onEdit(item),
+                      onDelete: () => onDelete(item),
                     ),
                     const SizedBox(height: 10),
                   ],
