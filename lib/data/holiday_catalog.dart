@@ -42,10 +42,18 @@ class HolidayCatalog {
 
   static DateTime? _onlineFetchedAt;
 
-  /// 当前用到的最新年份（线上有更新年份时优先用它）。
+  /// 当前用到的最新年份。
+  ///
+  /// 不能低于 [publishedYear]：线上数据通常只覆盖它自己那几年，若某次拉到的
+  /// 数据里没有更新的年份（例如只剩 2025），直接取线上最大年份会让界面上的
+  /// 「已更新 X 年安排」倒退成比内置数据还旧的年份。
   static int get latestYear {
     if (_online.isEmpty) return publishedYear;
-    return _online.keys.reduce((a, b) => a > b ? a : b);
+    var latest = publishedYear;
+    for (final year in _online.keys) {
+      if (year > latest) latest = year;
+    }
+    return latest;
   }
 
   static String get onlineSource => _onlineSource;

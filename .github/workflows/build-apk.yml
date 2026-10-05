@@ -116,7 +116,11 @@ jobs:
       - name: Fetch Dart dependencies
         run: flutter pub get
 
-      # 早失败：语法/类型/lint 问题在几十秒内暴露，而不是等 Gradle 跑满几分钟。
+      # Rust 日期核心的单元测试同样秒级，先于 Flutter/Gradle 阶段执行，让回归立刻暴露。
+      - name: Rust unit tests
+        run: cargo test --manifest-path rust/Cargo.toml
+
+      # 早失败：先跑秒级的 Rust 核心测试，再跑语法/类型/lint，而不是等 Gradle 跑满几分钟。
       - name: Static analysis
         run: flutter analyze
 

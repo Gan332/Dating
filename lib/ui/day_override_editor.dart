@@ -1,8 +1,9 @@
-import 'package:material_3_expressive/material_3_expressive.dart';
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../models/countdown_event.dart';
 import '../models/day_override.dart';
+import 'event_editor.dart';
 
 /// 编辑内置条目（官方节假日 / 传统节日）的结果。
 ///
@@ -49,6 +50,8 @@ class _DayOverrideEditorState extends State<DayOverrideEditor> {
   late DateTime _date;
   late String _category;
   late int _reminderDays;
+  late int _reminderHour;
+  late final TextEditingController _customLeadController;
   late bool _hidden;
 
   @override
@@ -59,13 +62,17 @@ class _DayOverrideEditorState extends State<DayOverrideEditor> {
     _date = widget.date;
     _category = '重要日';
     _reminderDays = -1;
+    _reminderHour = 9;
     _hidden = false;
+    // 改动面板总是从「没有提醒」开始，数字输入框也就从空开始。
+    _customLeadController = TextEditingController();
   }
 
   @override
   void dispose() {
     _titleController.dispose();
     _noteController.dispose();
+    _customLeadController.dispose();
     super.dispose();
   }
 
@@ -170,15 +177,82 @@ class _DayOverrideEditorState extends State<DayOverrideEditor> {
                   prefixIcon: Icon(Icons.notifications_outlined),
                   border: OutlineInputBorder(),
                 ),
-                items: const [
-                  DropdownMenuItem(value: -1, child: Text('关闭提醒')),
-                  DropdownMenuItem(value: 0, child: Text('当天 09:00')),
-                  DropdownMenuItem(value: 1, child: Text('提前 1 天 09:00')),
-                  DropdownMenuItem(value: 7, child: Text('提前 7 天 09:00')),
+                items: [
+                  const DropdownMenuItem(value: -1, child: Text('关闭提醒')),
+                  for (final option in kReminderLeadOptions)
+                    DropdownMenuItem(
+                      value: option.days,
+                      child: Text(
+                        '${option.label} ${formatHour(_reminderHour)}',
+                      ),
+                    ),
+                  DropdownMenuItem(
+                    value: kCustomLeadSentinel,
+                    child: Text(
+                      _reminderDays >= 0 && !kReminderLeadOptions
+                              .any((option) => option.days == _reminderDays)
+                          ? '自定义 · 提前 $_reminderDays 天'
+                          : '自定义天数',
+                    ),
+                  ),
                 ],
-                onChanged: (value) =>
-                    setState(() => _reminderDays = value ?? -1),
+                onChanged: (value) => setState(() {
+                  if (value == kCustomLeadSentinel) {
+                    if (!kReminderLeadOptions
+                        .any((option) => option.days == _reminderDays)) {
+                      _reminderDays = 30;
+                    }
+                    return;
+                  }
+                  _reminderDays = value ?? -1;
+                }),
               ),
+              // 选了预设之外的天数才问具体是多少天。
+              if (_reminderDays >= 0 &&
+                  !kReminderLeadOptions
+                      .any((option) => option.days == _reminderDays)) ...[
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _customLeadController,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(3),
+                  ],
+                  decoration: const InputDecoration(
+                    labelText: '提前多少天提醒',
+                    prefixIcon: Icon(Icons.event_repeat_outlined),
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (value) {
+                    final days = int.tryParse(value.trim());
+                    if (days != null && days >= 0 && days <= 365) {
+                      setState(() => _reminderDays = days);
+                    }
+                  },
+                ),
+              ],
+              // 关闭提醒时不问时刻，跟事件编辑器保持一致。
+              if (_reminderDays >= 0) ...[
+                const SizedBox(height: 12),
+                DropdownButtonFormField<int>(
+                  initialValue: _reminderHour,
+                  decoration: const InputDecoration(
+                    labelText: '提醒时刻',
+                    prefixIcon: Icon(Icons.schedule_outlined),
+                    border: OutlineInputBorder(),
+                  ),
+                  items: [
+                    for (var hour = 0; hour < 24; hour++)
+                      DropdownMenuItem(
+                        value: hour,
+                        child: Text(formatHour(hour)),
+                      ),
+                  ],
+                  onChanged: (value) =>
+                      setState(() => _reminderHour = value ?? 9),
+                ),
+              ],
               const SizedBox(height: 14),
               TextField(
                 controller: _noteController,
@@ -256,6 +330,7 @@ class _DayOverrideEditorState extends State<DayOverrideEditor> {
       category: _category,
       note: _noteController.text.trim(),
       reminderDays: _reminderDays,
+      reminderHour: _reminderHour,
       hidden: _hidden,
     );
   }

@@ -6,7 +6,19 @@ import '../models/day_override.dart';
 class EventStore {
   Database? _database;
 
-  static const int _schemaVersion = 2;
+  /// [databasePath] 只给测试用。应用运行期库文件固定在 `getDatabasesPath()` 下，
+  /// 但 `sqflite_common_ffi` 在纯 Dart 环境里那个目录并不可用，不注入路径就没法
+  /// 让单测跑真实 SQL。留空时行为与从前完全一致。
+  EventStore({String? databasePath}) : _databasePath = databasePath;
+
+  final String? _databasePath;
+
+  static const int _schemaVersion = 3;
+
+  /// 能读进来的备份版本。仍然接受 1：老备份里没有 `reminderHour`，从模型的缺省值
+  /// 回落成 9 点即可，不该因为版本号旧就把用户自己的数据挡在门外。再往后的版本
+  /// 字段含义未知，必须拒绝，否则可能把新结构按老结构写坏。
+  static const Set<int> _readableBackupVersions = {1, 2};
 
   static const String _createEvents = '''
           CREATE TABLE events (
@@ -18,7 +30,8 @@ class EventStore {
             note TEXT NOT NULL,
             lunarMonth INTEGER,
             lunarDay INTEGER,
-            reminderDays INTEGER NOT NULL DEFAULT -1
+            reminderDays INTEGER NOT NULL DEFAULT -1,
+            reminderHour INTEGER NOT NULL DEFAULT 9
           )
         ''';
 
@@ -30,6 +43,7 @@ class EventStore {
             category TEXT NOT NULL,
             note TEXT NOT NULL,
             reminderDays INTEGER NOT NULL DEFAULT -1,
+            reminderHour INTEGER NOT NULL DEFAULT 9,
             hidden INTEGER NOT NULL DEFAULT 0
           )
         ''';
@@ -37,9 +51,10 @@ class EventStore {
   Future<Database> get _db async {
     final current = _database;
     if (current != null) return current;
-    final path = await getDatabasesPath();
+    final path =
+        _databasePath ?? '${await getDatabasesPath()}/daymark_events.db';
     final db = await openDatabase(
-      '$path/daymark_events.db',
+      path,
       version: _schemaVersion,
       onCreate: (database, version) async {
         await database.execute(_createEvents);
@@ -50,10 +65,28 @@ class EventStore {
         if (oldVersion < 2) {
           await database.execute(_createOverrides);
         }
+        // 提醒时刻是后来才有的字段。给已有行补一个 9 点的默认值，
+        // 免得升级后读出来的记录少一个字段、整个列表打不开。
+        if (oldVersion < 3) {
+          await database.execute(
+            'ALTER TABLE events ADD COLUMN reminderHour INTEGER NOT NULL DEFAULT 9',
+          );
+          await database.execute(
+            'ALTER TABLE day_overrides ADD COLUMN reminderHour INTEGER NOT NULL DEFAULT 9',
+          );
+        }
       },
     );
     _database = db;
     return db;
+  }
+
+  /// 关闭数据库并丢掉缓存句柄。应用运行期不调用；单测拆临时库时必须先关，
+  /// 否则文件仍被占用删不掉，下一次跑会读到上次的残留数据。
+  Future<void> close() async {
+    final current = _database;
+    _database = null;
+    await current?.close();
   }
 
   Future<List<CountdownEvent>> allEvents() async {
@@ -153,7 +186,7 @@ class EventStore {
     final overrides = await allOverrides();
     return {
       'format': 'daymark.backup',
-      'version': 1,
+      'version': 2,
       'exportedAt': DateTime.now().toIso8601String(),
       'events': events.map((event) => event.toMap()).toList(),
       'overrides': overrides.map((override) => override.toMap()).toList(),
@@ -178,9 +211,12 @@ class EventStore {
     });
   }
 
+  /// 导入一份备份，返回事件条数。
   Future<int> importPayload(Map<String, dynamic> decoded) async {
+    final version = decoded['version'];
     if (decoded['format'] != 'daymark.backup' ||
-        decoded['version'] != 1 ||
+        (version is! num ||
+            !_readableBackupVersions.contains(version.toInt())) ||
         decoded['events'] is! List) {
       throw const FormatException('备份格式无法识别');
     }

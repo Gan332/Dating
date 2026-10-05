@@ -10,6 +10,7 @@ class DayOverride {
     required this.category,
     required this.note,
     required this.reminderDays,
+    this.reminderHour = 9,
     this.hidden = false,
   });
 
@@ -28,6 +29,10 @@ class DayOverride {
   /// -1 表示不提醒。
   final int reminderDays;
 
+  /// 提醒当天的几点（0..23）。和用户自己记的事件用同一个默认时刻，
+  /// 这样「改过的内置条目」和「自己记的事件」在提醒时刻上表现一致。
+  final int reminderHour;
+
   /// 是否把这条内置条目从界面里隐藏。
   final bool hidden;
 
@@ -37,6 +42,7 @@ class DayOverride {
     String? category,
     String? note,
     int? reminderDays,
+    int? reminderHour,
     bool? hidden,
   }) {
     return DayOverride(
@@ -46,6 +52,7 @@ class DayOverride {
       category: category ?? this.category,
       note: note ?? this.note,
       reminderDays: reminderDays ?? this.reminderDays,
+      reminderHour: reminderHour ?? this.reminderHour,
       hidden: hidden ?? this.hidden,
     );
   }
@@ -57,10 +64,14 @@ class DayOverride {
         'category': category,
         'note': note,
         'reminderDays': reminderDays,
+        'reminderHour': reminderHour,
         'hidden': hidden ? 1 : 0,
       };
 
   factory DayOverride.fromMap(Map<String, Object?> map) {
+    // 旧备份没有这个字段，回落到 9 点；再夹一次范围，手改过的备份也不能把
+    // 30 点这种非法值带进数据库。
+    final hour = ((map['reminderHour'] as num?)?.toInt() ?? 9).clamp(0, 23);
     final raw = DateTime.parse(map['date']! as String);
     return DayOverride(
       origin: map['origin']! as String,
@@ -68,6 +79,7 @@ class DayOverride {
       date: DateTime(raw.year, raw.month, raw.day),
       category: (map['category'] as String?) ?? '重要日',
       note: (map['note'] as String?) ?? '',
+      reminderHour: hour,
       reminderDays: (map['reminderDays'] as num?)?.toInt() ?? -1,
       hidden: ((map['hidden'] as num?)?.toInt() ?? 0) == 1,
     );

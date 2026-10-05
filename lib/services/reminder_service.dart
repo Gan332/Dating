@@ -100,7 +100,13 @@ class ReminderService implements ReminderScheduler {
         final dates = CalendarEngine.occurrences(event, now, limit: 2);
         for (var index = 0; index < dates.length; index++) {
           final date = dates[index].subtract(Duration(days: event.reminderDays));
-          final trigger = DateTime(date.year, date.month, date.day, 9);
+          // 提醒时刻由每条记录自己决定（默认早上 9 点），不再写死。
+          final trigger = DateTime(
+            date.year,
+            date.month,
+            date.day,
+            event.reminderHour,
+          );
           if (!trigger.isAfter(now)) continue;
           final notificationId = _notificationId(event.id, index);
           await _plugin.zonedSchedule(

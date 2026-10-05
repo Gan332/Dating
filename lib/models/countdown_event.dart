@@ -14,6 +14,7 @@ class CountdownEvent {
     this.lunarMonth,
     this.lunarDay,
     this.reminderDays = -1,
+    this.reminderHour = 9,
   });
 
   final String id;
@@ -26,6 +27,11 @@ class CountdownEvent {
   final int? lunarDay;
   final int reminderDays;
 
+  /// 提醒当天的几点（0..23）。默认早上 9 点：多数倒数日是「当天早上才想起来看一眼」，
+  /// 半夜推送只会显得打扰。存成整数而不是 [DateTime]，是为了让 SQL 列与备份 JSON
+  /// 都用一个标量表达，跨时区也不会把「上午 9 点」漂移成别的时间。
+  final int reminderHour;
+
   CountdownEvent copyWith({
     String? id,
     String? title,
@@ -36,6 +42,7 @@ class CountdownEvent {
     int? lunarMonth,
     int? lunarDay,
     int? reminderDays,
+    int? reminderHour,
   }) {
     return CountdownEvent(
       id: id ?? this.id,
@@ -47,6 +54,7 @@ class CountdownEvent {
       lunarMonth: lunarMonth ?? this.lunarMonth,
       lunarDay: lunarDay ?? this.lunarDay,
       reminderDays: reminderDays ?? this.reminderDays,
+      reminderHour: reminderHour ?? this.reminderHour,
     );
   }
 
@@ -60,6 +68,7 @@ class CountdownEvent {
         'lunarMonth': lunarMonth,
         'lunarDay': lunarDay,
         'reminderDays': reminderDays,
+        'reminderHour': reminderHour,
       };
 
   factory CountdownEvent.fromMap(Map<String, Object?> map) {
@@ -70,6 +79,9 @@ class CountdownEvent {
     );
     final month = map['lunarMonth'];
     final day = map['lunarDay'];
+    // 旧备份没有这个字段，回落到 9 点；再夹一次范围，手改过的备份也不能把
+    // 30 点这种非法值带进数据库。
+    final hour = ((map['reminderHour'] as num?)?.toInt() ?? 9).clamp(0, 23);
     return CountdownEvent(
       id: map['id'] as String,
       title: map['title'] as String,
@@ -80,6 +92,7 @@ class CountdownEvent {
       lunarMonth: month == null ? null : (month as num).toInt(),
       lunarDay: day == null ? null : (day as num).toInt(),
       reminderDays: (map['reminderDays'] as num?)?.toInt() ?? -1,
+      reminderHour: hour,
     );
   }
 

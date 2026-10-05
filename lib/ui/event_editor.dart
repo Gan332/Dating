@@ -1,10 +1,35 @@
-import 'dart:math';
-
+import 'package:flutter/services.dart';
+import 'package:math';
 import 'package:lunar/lunar.dart';
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../models/countdown_event.dart';
+
+/// 提醒提前量选项。[days] 与数据库里的 `reminderDays` 一一对应，-1 表示关闭。
+///
+/// 单独列出来是为了让编辑器与批量修改共用一份选项，避免两处各写一遍后
+/// 文案对不上。
+const List<({int days, String label})> kReminderLeadOptions = [
+  (days: 0, label: '当天'),
+  (days: 1, label: '提前 1 天'),
+  (days: 7, label: '提前 7 天'),
+];
+
+/// 把 0..23 的小时数格式成「09:00」。
+String formatHour(int hour) =>
+    '${hour.toString().padLeft(2, '0')}:00';
+
+
+/// 提醒下拉里「自定义天数」这一项的占位值。
+///
+/// `reminderDays` 是真实的提前天数（-1 关闭、0 当天、1、7…），用一个不与任何
+/// 合法天数冲突的哨兵值来表示「用户想自己填」，避免把它误当成天数存进数据库。
+const int kCustomLeadSentinel = -999;
+
+/// 提前天数是否正好是下拉里的预设项。
+bool _isPresetLead(int days) =>
+    kReminderLeadOptions.any((option) => option.days == days);
 
 class EventEditor extends StatefulWidget {
   const EventEditor({super.key, this.event});
@@ -19,10 +44,12 @@ class _EventEditorState extends State<EventEditor> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _titleController;
   late final TextEditingController _noteController;
+  late final TextEditingController _customLeadController;
   late DateTime _date;
   late EventRecurrence _recurrence;
   late String _category;
   late int _reminderDays;
+  late int _reminderHour;
   late bool _leapMonth;
 
   @override
@@ -35,13 +62,22 @@ class _EventEditorState extends State<EventEditor> {
     _recurrence = event?.recurrence ?? EventRecurrence.once;
     _category = event?.category ?? '纪念日';
     _reminderDays = event?.reminderDays ?? -1;
+    _reminderHour = event?.reminderHour ?? 9;
     _leapMonth = (event?.lunarMonth ?? 0) < 0;
+    // 已经是自定义天数的记录，打开编辑器就该把这个数字显示出来，
+    // 否则用户看到空白输入框会以为提醒没设置。
+    _customLeadController = TextEditingController(
+      text: _isPresetLead(_reminderDays) || _reminderDays < 0
+          ? ''
+          : _reminderDays.toString(),
+    );
   }
 
   @override
   void dispose() {
     _titleController.dispose();
     _noteController.dispose();
+    _customLeadController.dispose();
     super.dispose();
   }
 
@@ -186,15 +222,86 @@ class _EventEditorState extends State<EventEditor> {
                     prefixIcon: Icon(Icons.notifications_outlined),
                     border: OutlineInputBorder(),
                   ),
-                  items: const [
-                    DropdownMenuItem(value: -1, child: Text('关闭提醒')),
-                    DropdownMenuItem(value: 0, child: Text('当天 09:00')),
-                    DropdownMenuItem(value: 1, child: Text('提前 1 天 09:00')),
-                    DropdownMenuItem(value: 7, child: Text('提前 7 天 09:00')),
+                  items: [
+                    const DropdownMenuItem(value: -1, child: Text('关闭提醒')),
+                    for (final option in kReminderLeadOptions)
+                      DropdownMenuItem(
+                        value: option.days,
+                        child: Text(
+                          '${option.label} ${formatHour(_reminderHour)}',
+                        ),
+                      ),
+                    DropdownMenuItem(
+                      value: kCustomLeadSentinel,
+                      child: Text(
+                        _reminderDays >= 0 && !kReminderLeadOptions
+                                .any((option) => option.days == _reminderDays)
+                            ? '自定义 · 提前 $_reminderDays 天'
+                            : '自定义天数',
+                      ),
+                    ),
                   ],
-                  onChanged: (value) =>
-                      setState(() => _reminderDays = value ?? -1),
+                  onChanged: (value) => setState(() {
+                    if (value == kCustomLeadSentinel) {
+                      // 落进自定义分支时给个合理起点：30 天。
+                      if (!_isPresetLead(_reminderDays)) {
+                        _reminderDays = 30;
+                      }
+                      return;
+                    }
+                    _reminderDays = value ?? -1;
+                  }),
                 ),
+                // 选了预设之外的天数才问具体是多少天，否则多一个没用的输入框。
+                if (_reminderDays >= 0 && !_isPresetLead(_reminderDays)) ...[
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _customLeadController,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.digitsOnly,
+                      LengthLimitingTextInputFormatter(3),
+                    ],
+                    decoration: const InputDecoration(
+                      labelText: '提前多少天提醒',
+                      prefixIcon: Icon(Icons.event_repeat_outlined),
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (value) {
+                      final text = value?.trim() ?? '';
+                      if (text.isEmpty) return '填一个 0 到 365 之间的天数';
+                      final days = int.tryParse(text);
+                      if (days == null) return '请填一个整数';
+                      if (days < 0 || days > 365) return '最多提前 365 天';
+                      return null;
+                    },
+                    onChanged: (value) {
+                      final days = int.tryParse(value.trim());
+                      if (days != null) setState(() => _reminderDays = days);
+                    },
+                  ),
+                ],
+                // 提醒时刻只在真的要提醒时才问，关闭提醒时显示它没有意义。
+                if (_reminderDays >= 0) ...[
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<int>(
+                    initialValue: _reminderHour,
+                    decoration: const InputDecoration(
+                      labelText: '提醒时刻',
+                      prefixIcon: Icon(Icons.schedule_outlined),
+                      border: OutlineInputBorder(),
+                    ),
+                    items: [
+                      for (var hour = 0; hour < 24; hour++)
+                        DropdownMenuItem(
+                          value: hour,
+                          child: Text(formatHour(hour)),
+                        ),
+                    ],
+                    onChanged: (value) =>
+                        setState(() => _reminderHour = value ?? 9),
+                  ),
+                ],
                 const SizedBox(height: 14),
                 TextFormField(
                   controller: _noteController,
@@ -262,6 +369,7 @@ class _EventEditorState extends State<EventEditor> {
       lunarMonth: _recurrence == EventRecurrence.lunarYearly ? lunarMonth : null,
       lunarDay: _recurrence == EventRecurrence.lunarYearly ? lunar.getDay() : null,
       reminderDays: _reminderDays,
+      reminderHour: _reminderHour,
     );
     Navigator.pop(context, event);
   }

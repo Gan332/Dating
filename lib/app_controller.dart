@@ -3,6 +3,8 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
+import 'core/calendar_engine.dart';
+import 'data/backup_file_gateway.dart';
 import 'data/event_store.dart';
 import 'data/holiday_catalog.dart';
 import 'data/holiday_repository.dart';
@@ -31,11 +33,13 @@ class AppController extends ChangeNotifier {
     ReminderScheduler? reminders,
     SettingsStore? settingsStore,
     HolidayRepository? holidays,
+    BackupFileGateway? backupFiles,
     this.timeout = stepTimeout,
   })  : _store = store ?? EventStore(),
         _reminders = reminders ?? ReminderService.instance,
         _settingsStore = settingsStore ?? SettingsStore(),
-        _holidays = holidays ?? HolidayRepository();
+        _holidays = holidays ?? HolidayRepository(),
+        _backupFiles = backupFiles ?? PluginBackupFileGateway();
 
   /// 单个启动步骤的上限。插件通道或文件系统一旦无响应，也要让界面出来，
   /// 而不是让用户对着启动转圈无限等待。
@@ -48,6 +52,10 @@ class AppController extends ChangeNotifier {
   final ReminderScheduler _reminders;
   final SettingsStore _settingsStore;
   final HolidayRepository _holidays;
+
+  /// 备份文件的读写通道。剪贴板那条路不可靠——下一次复制就会冲掉备份，
+  /// 换手机更是直接丢，所以正式入口走文件。
+  final BackupFileGateway _backupFiles;
 
   List<CountdownEvent> _events = const [];
   final Map<String, DayOverride> _overrides = {};
@@ -62,8 +70,139 @@ class AppController extends ChangeNotifier {
   DateTime? _holidayFetchedAt;
 
   List<CountdownEvent> get events => _events;
+
   bool get ready => _ready;
   bool get loading => _loading;
+
+  /// 按关键词与分类过滤已加载的记录，仅供界面筛选用：既不落库也不发通知，
+  /// 所以可以放心地在 build() 里直接调用。
+  /// [term] 会去掉首尾空白并忽略大小写，在标题与备注里查找；为空表示不过滤。
+  /// [category] 为空表示不限分类。
+  List<CountdownEvent> searchResults(String term, {String? category}) {
+    final keyword = term.trim().toLowerCase();
+    // 空条件走快路径：不做任何判断，但仍然交出不可修改的视图，
+    // 免得调用方把结果当成自己的临时列表去改。
+    if (keyword.isEmpty && category == null) return List.unmodifiable(_events);
+    return List<CountdownEvent>.unmodifiable([
+      for (final event in _events)
+        if ((category == null || event.category == category) &&
+            (keyword.isEmpty ||
+                event.title.toLowerCase().contains(keyword) ||
+                event.note.toLowerCase().contains(keyword)))
+          event,
+    ]);
+  }
+
+  /// 内置条目（官方假期与传统节日）里，接下来 [days] 天内值得关注的那些。
+  ///
+  /// 内置数据本身不落库，每次都要现算，所以抽到状态层里给首页与搜索共用，
+  /// 免得两个页面各写一份、以后改口径时只改一处。已改动（[overrides]）与已隐藏
+  /// 的条目都按改动后的样子返回。
+  ///
+  /// 不落库也不通知，可以在 build() 里直接调用。
+  List<EventOccurrence> builtInOccurrences(DateTime today, {int days = 181}) {
+    final start = CalendarEngine.dateOnly(today);
+    // 窗口是 [start, start + days)：传统节日交给 lunarFestivalsInRange 已经按这个
+    // 口径过滤，官方假期必须自己比一次，否则会混进几百天外的假期。
+    final windowEnd = start.add(Duration(days: days));
+    final found = <EventOccurrence>[];
+
+    for (final span in HolidayCatalog.spansForYear(start.year)) {
+      if (span.end.isBefore(start)) continue;
+      final origin = CalendarEngine.holidayOrigin(span.name, span.start);
+      final patch = _overrides[origin];
+      if (patch?.hidden ?? false) continue;
+      // 假期已经开始时，倒数对准的是「今天」而不是假期第一天。
+      // 改动后的日期也可能落到今天之前（例如把进行中的春节改到 2 月 10 日），
+      // 同样要对准今天——否则界面会出现「还剩 -3 天」这种负数倒数。
+      final patched = patch?.date;
+      final date = patched != null && !patched.isBefore(start)
+          ? patched
+          : (span.start.isBefore(start) ? start : span.start);
+      if (date.isAfter(windowEnd)) continue;
+      found.add(
+        EventOccurrence(
+          title: patch?.title ?? span.name,
+          date: date,
+          daysRemaining: CalendarEngine.daysBetween(start, date),
+          subtitle: patch == null
+              ? '${HolidayCatalog.publishedYear} 官方假期'
+              : '${HolidayCatalog.publishedYear} 官方假期 · 已改动',
+          origin: origin,
+          overridden: patch != null,
+          reminderDays: patch?.reminderDays ?? -1,
+        ),
+      );
+    }
+
+    for (final entry
+        in CalendarEngine.lunarFestivalsInRange(start, days).entries) {
+      for (final name in entry.value) {
+        final origin = CalendarEngine.festivalOrigin(entry.key, name);
+        final patch = _overrides[origin];
+        if (patch?.hidden ?? false) continue;
+        final patched = patch?.date;
+        // 同上：改动后的日期落到今天之前时不产生负数倒数。
+        final date = patched != null && !patched.isBefore(start)
+            ? patched
+            : entry.key;
+        found.add(
+          EventOccurrence(
+            title: patch?.title ?? name,
+            date: date,
+            daysRemaining: CalendarEngine.daysBetween(start, date),
+            subtitle: patch == null ? '传统节日' : '传统节日 · 已改动',
+            origin: origin,
+            overridden: patch != null,
+            reminderDays: patch?.reminderDays ?? -1,
+          ),
+        );
+      }
+    }
+
+    return List<EventOccurrence>.unmodifiable(found);
+  }
+
+  /// 按关键词与分类过滤「接下来」的条目，自带记录与内置条目一起搜。
+  ///
+  /// 搜索框里写「春节」时，用户期待看到内置的春节假期，而不只是自己记的条目；
+  /// 分类筛选对内置条目同样生效（它们默认算「重要日」，被改动过则按改动后的分类）。
+  /// 返回值按剩余天数升序，与首页展示顺序一致。不落库也不通知。
+  List<EventOccurrence> searchOccurrences(
+    String term, {
+    String? category,
+    DateTime? today,
+    int days = 181,
+  }) {
+    final start = today ?? CalendarEngine.dateOnly(DateTime.now());
+    final own = searchResults(term, category: category)
+        .map((event) => CalendarEngine.nextOccurrence(event, start))
+        .whereType<EventOccurrence>();
+    final keyword = term.trim().toLowerCase();
+    // 内置条目只按标题搜，不按 subtitle 搜：subtitle 是「2026 官方假期」这类来源
+    // 说明，搜「2026」会把所有官方假期一次性全列出来，搜「官方」也一样——
+    // 那不是用户想找的东西。自带记录仍按标题 + 备注搜，两边口径就此不同。
+    final builtIn = builtInOccurrences(start, days: days).where(
+      (item) =>
+          (category == null || _categoryOf(item) == category) &&
+          (keyword.isEmpty || item.title.toLowerCase().contains(keyword)),
+    );
+
+    final all = <EventOccurrence>[...own, ...builtIn]
+      ..sort((a, b) {
+        final byDays = a.daysRemaining.compareTo(b.daysRemaining);
+        return byDays != 0 ? byDays : a.title.compareTo(b.title);
+      });
+    return List<EventOccurrence>.unmodifiable(all);
+  }
+
+  /// 内置条目的归类：被改动过按改动的分类算，否则算「重要日」——
+  /// 与 [CountdownEvent.category] 的默认值保持一致。
+  String _categoryOf(EventOccurrence item) {
+    final origin = item.origin;
+    if (origin == null) return item.event?.category ?? '重要日';
+    return _overrides[origin]?.category ?? '重要日';
+  }
 
   /// 启动过程中失败的原因；为空表示一切正常。
   String? get loadError => _loadError;
@@ -109,6 +248,8 @@ class AppController extends ChangeNotifier {
           category: override.category,
           note: override.note,
           reminderDays: override.reminderDays,
+          // 时刻也要带过去，否则改了内置条目的提醒时刻不会生效。
+          reminderHour: override.reminderHour,
         ),
       );
     }
@@ -386,11 +527,14 @@ class AppController extends ChangeNotifier {
     if (decoded is! Map<String, dynamic>) {
       throw const FormatException('备份格式无法识别');
     }
-    _remember('恢复备份');
+    // 先导入再记快照：导入失败时上面的 _undoSnapshot 原封不动，用户才还撤得回
+    // 上一次改动。快照此刻记下的仍是内存里的旧数据（_refresh 还没跑），也就是
+    // undo() 要还原回去的那一份，所以挪到这里既安全又语义正确。
     final count = await _withTimeout(
       _store.importPayload(decoded),
       '恢复备份',
     );
+    _remember('恢复备份');
     final rawSettings = decoded['settings'];
     if (rawSettings is Map<String, dynamic>) {
       _settings = AppSettings.fromJson(rawSettings);
@@ -398,6 +542,31 @@ class AppController extends ChangeNotifier {
     }
     await _refresh();
     return count;
+  }
+
+  /// 导出到文件：交给系统分享面板，由用户自己挑位置保存。
+  ///
+  /// 返回 `false` 表示用户在面板上点了取消，没有产生任何后果。
+  /// 真正做不成时抛 [BackupFileException]，消息能直接展示。
+  Future<bool> exportToFile({DateTime? now}) =>
+      _withTimeout(
+        _backupFiles.exportText(
+          exportJson(),
+          filename: backupFilename(now ?? DateTime.now()),
+        ),
+        '导出备份',
+      );
+
+  /// 从文件恢复。用户取消选择时返回 `null`，不当作错误。
+  ///
+  /// 返回导入的记录条数。
+  Future<int?> importFromFile() async {
+    final source = await _withTimeout(
+      _backupFiles.importText(),
+      '读取备份文件',
+    );
+    if (source == null) return null;
+    return importJson(source);
   }
 
   // ------------------------------------------------------------ 内部工具

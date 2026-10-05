@@ -202,6 +202,7 @@ class _AppShellState extends State<AppShell> {
         onEdit: _editOccurrence,
         onDelete: _deleteOccurrence,
         onMutate: _runMutation,
+        onOpenAll: () => setState(() => _tab = 2),
       ),
       CalendarPage(controller: widget.controller, onEdit: _editEventRecord),
       ImportantDaysPage(
@@ -275,6 +276,7 @@ class HomePage extends StatefulWidget {
     required this.onEdit,
     required this.onDelete,
     required this.onMutate,
+    this.onOpenAll,
   });
 
   final AppController controller;
@@ -283,12 +285,19 @@ class HomePage extends StatefulWidget {
   final ValueChanged<EventOccurrence> onDelete;
   final MutationRunner onMutate;
 
+  /// 首页条目多到一屏放不下时，点「查看全部」跳到重要日页。
+  final VoidCallback? onOpenAll;
+
   @override
   State<HomePage> createState() => _HomePageState();
 }
 
 class _HomePageState extends State<HomePage> {
   final BatchSelection _selection = BatchSelection();
+
+  /// 首页最多铺多少条。超过这个数就在末尾给一个「查看全部」入口，
+  /// 而不是静悄悄地截断——用户无法知道自己漏看了什么。
+  static const int _homeListLimit = 12;
 
   /// 当前列表里可见的条目，批量操作按它取选中项。
   List<EventOccurrence> _visible = const [];
@@ -299,53 +308,15 @@ class _HomePageState extends State<HomePage> {
     final onAdd = widget.onAdd;
     final now = DateTime.now();
     final today = CalendarEngine.dateOnly(now);
-    final overrides = controller.overrides;
-    final occurrences = <EventOccurrence>[];
-    for (final event in controller.events) {
-      final occurrence = CalendarEngine.nextOccurrence(event, today);
-      if (occurrence != null && occurrence.daysRemaining >= 0) {
-        occurrences.add(occurrence);
-      }
-    }
-    for (final span in HolidayCatalog.spansForYear(today.year)) {
-      if (span.end.isBefore(today)) continue;
-      final origin = CalendarEngine.holidayOrigin(span.name, span.start);
-      final patch = overrides[origin];
-      if (patch?.hidden ?? false) continue;
-      final date =
-          patch?.date ?? (span.start.isBefore(today) ? today : span.start);
-      occurrences.add(EventOccurrence(
-        title: patch?.title ?? span.name,
-        date: date,
-        daysRemaining: CalendarEngine.daysBetween(today, date),
-        subtitle: patch == null
-            ? '${HolidayCatalog.publishedYear} 官方假期'
-            : '${HolidayCatalog.publishedYear} 官方假期 · 已改动',
-        origin: origin,
-        overridden: patch != null,
-        reminderDays: patch?.reminderDays ?? -1,
-      ));
-    }
-    for (var offset = 0; offset <= 180; offset++) {
-      final date = today.add(Duration(days: offset));
-      final names = CalendarEngine.lunarFestivals(date).toSet();
-      for (final name in names) {
-        if (name.isEmpty) continue;
-        final origin = CalendarEngine.festivalOrigin(date, name);
-        final patch = overrides[origin];
-        if (patch?.hidden ?? false) continue;
-        final date2 = patch?.date ?? date;
-        occurrences.add(EventOccurrence(
-          title: patch?.title ?? name,
-          date: date2,
-          daysRemaining: CalendarEngine.daysBetween(today, date2),
-          subtitle: patch == null ? '传统节日' : '传统节日 · 已改动',
-          origin: origin,
-          overridden: patch != null,
-          reminderDays: patch?.reminderDays ?? -1,
-        ));
-      }
-    }
+    // 内置条目交给控制器统一算，首页与搜索共用同一份口径。
+    final occurrences = <EventOccurrence>[
+      for (final event in controller.events)
+        if (CalendarEngine.nextOccurrence(event, today)
+            case final occurrence?
+            when occurrence.daysRemaining >= 0)
+          occurrence,
+      ...controller.builtInOccurrences(today),
+    ];
     final customKeys = occurrences
         .where((item) => item.event != null)
         .map((item) => '${item.title}:${CountdownEvent.dateKey(item.date)}')
@@ -434,6 +405,7 @@ class _HomePageState extends State<HomePage> {
               const SizedBox(height: 20),
               _HeroCountdown(
                 occurrence: upcoming.isEmpty ? null : upcoming.first,
+                today: today,
                 onAdd: onAdd,
               ),
               const SizedBox(height: 12),
@@ -477,8 +449,9 @@ class _HomePageState extends State<HomePage> {
               const SizedBox(height: 12),
               if (upcoming.isEmpty)
                 _EmptyEvents(onAdd: onAdd)
-              else
-                for (final (index, item) in upcoming.take(8).indexed)
+              else ...[
+                // 首页不再截断：全部列出来，超过一屏就继续往下滚。
+                for (final (index, item) in upcoming.indexed)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 10),
                     child: _Entrance(
@@ -494,6 +467,14 @@ class _HomePageState extends State<HomePage> {
                       ),
                     ),
                   ),
+                if (upcoming.length > _homeListLimit)
+                  Center(
+                    child: TextButton(
+                      onPressed: widget.onOpenAll,
+                      child: Text('还有 ${upcoming.length - _homeListLimit} 条，查看全部'),
+                    ),
+                  ),
+              ],
               const SizedBox(height: 8),
               Text(
                 '长按条目可多选批量改动。',
@@ -577,9 +558,17 @@ class _HomePageState extends State<HomePage> {
   }
 }
 class _HeroCountdown extends StatelessWidget {
-  const _HeroCountdown({required this.occurrence, required this.onAdd});
+  const _HeroCountdown({
+    required this.occurrence,
+    required this.today,
+    required this.onAdd,
+  });
 
   final EventOccurrence? occurrence;
+
+  /// 进度条要以「今天」为基准算，所以由调用方传入，避免卡片内部再取一次时间。
+  final DateTime today;
+
   final VoidCallback onAdd;
 
   @override
@@ -682,22 +671,65 @@ class _HeroCountdown extends StatelessWidget {
                       ),
                   ],
                 ),
-                const SizedBox(height: 16),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: const LinearProgressIndicator(
-                    value: .42,
-                    minHeight: 5,
-                    backgroundColor: Colors.white24,
-                    color: Colors.white,
+                // 已经过去多少天、第几周年。倒数日应用最打动人的是「相伴多久」，
+                // 算不出来时整行不出现。
+                if (_milestoneOf(item) case final text?) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    text,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 13,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
-                const Text('每一天，都在靠近',
-                    style: TextStyle(color: Colors.white70, fontSize: 12)),
+                ],
+                // 只有年度重复的事件算得出真实进度；一次性事件与内置条目
+                // 没有「上一次」可依，这时不画进度条，也不显示配套文案，
+                // 免得给出一个与数据无关的数字。
+                if (_progressOf(item) case final progress?) ...[
+                  const SizedBox(height: 16),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: TweenAnimationBuilder<double>(
+                      tween: Tween<double>(begin: 0, end: progress),
+                      duration: M3EMotion.extraLong1,
+                      curve: Curves.easeOutCubic,
+                      builder: (context, value, _) => LinearProgressIndicator(
+                        value: value,
+                        minHeight: 5,
+                        backgroundColor: Colors.white24,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '一个周期已走过 ${(progress * 100).round()}%',
+                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                ],
               ],
             ),
     );
+  }
+
+  /// 这条倒计时的真实进度；算不出来时返回 null，调用方据此隐藏进度条。
+  double? _progressOf(EventOccurrence item) {
+    final event = item.event;
+    if (event == null) return null;
+    return CalendarEngine.approachProgress(event, item.date, today);
+  }
+
+  /// 里程碑文案（已过天数 + 周年）；算不出来时返回 null，调用方据此整行隐藏。
+  String? _milestoneOf(EventOccurrence item) {
+    final event = item.event;
+    if (event == null) return null;
+    final milestone = CalendarEngine.milestoneFor(event, item.date);
+    if (milestone == null) return null;
+    final text = CalendarEngine.milestoneSummary(milestone);
+    return text.isEmpty ? null : text;
   }
 }
 
@@ -771,6 +803,12 @@ class _OccurrenceTile extends StatelessWidget {
     final subtitle = occurrence.subtitle +
         recurrenceLabel +
         (reminderDays >= 0 ? ' · 已提醒' : '');
+
+    // 只有自带记录才有「从最初那一天算起」的意义：内置条目的 date 就是它
+    // 本身，算出来只会是一句没有信息量的「今天就是这一天」。
+    final milestone = event == null
+        ? null
+        : CalendarEngine.milestoneFor(event, date);
     return _Pressable(
       child: Card(
       margin: EdgeInsets.zero,
@@ -830,6 +868,18 @@ class _OccurrenceTile extends StatelessWidget {
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                               color: colors.onSurfaceVariant,
                             )),
+                    // 已经过去多少天、第几周年——只有自带记录算得出来，
+                    // 内置条目的 date 就是它本身，算出来只会是「今天就是这一天」。
+                    if (milestone case final text?) ...[
+                      const SizedBox(height: 2),
+                      Text(text,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style:
+                              Theme.of(context).textTheme.labelSmall?.copyWith(
+                                    color: colors.primary,
+                                  )),
+                    ],
                   ],
                 ),
               ),
@@ -877,10 +927,17 @@ class _OccurrenceTile extends StatelessWidget {
     );
   }
 }
+/// 列表空态。[filtered] 为真表示记录本身存在、只是被搜索或分类筛掉了，
+/// 这时不该再劝用户去新建一条。
 class _EmptyEvents extends StatelessWidget {
-  const _EmptyEvents({required this.onAdd});
+  const _EmptyEvents({required this.onAdd, this.onClearFilter, this.filtered = false});
 
   final VoidCallback onAdd;
+
+  /// 清除筛选条件的回调；为空表示当前不是被筛空的状态。
+  final VoidCallback? onClearFilter;
+
+  final bool filtered;
 
   @override
   Widget build(BuildContext context) => Card(
@@ -891,22 +948,39 @@ class _EmptyEvents extends StatelessWidget {
           padding: const EdgeInsets.all(22),
           child: Column(
             children: [
-              const Icon(Icons.event_available_rounded, size: 32),
-              const SizedBox(height: 10),
-              const Text('还没有自定义重要日'),
-              const SizedBox(height: 8),
-              M3EButton(
-                style: M3EButtonStyle.text,
-                onPressed: onAdd,
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.add_rounded),
-                    SizedBox(width: 8),
-                    Text('添加一条'),
-                  ],
-                ),
+              Icon(
+                filtered ? Icons.search_off_rounded : Icons.event_available_rounded,
+                size: 32,
               ),
+              const SizedBox(height: 10),
+              Text(filtered ? '没有符合条件的记录' : '还没有自定义重要日'),
+              const SizedBox(height: 8),
+              if (filtered)
+                M3EButton(
+                  style: M3EButtonStyle.text,
+                  onPressed: onClearFilter,
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.filter_alt_off_outlined),
+                      SizedBox(width: 8),
+                      Text('清除筛选'),
+                    ],
+                  ),
+                )
+              else
+                M3EButton(
+                  style: M3EButtonStyle.text,
+                  onPressed: onAdd,
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.add_rounded),
+                      SizedBox(width: 8),
+                      Text('添加一条'),
+                    ],
+                  ),
+                ),
             ],
           ),
         ),
@@ -935,18 +1009,32 @@ class ImportantDaysPage extends StatefulWidget {
 
 class _ImportantDaysPageState extends State<ImportantDaysPage> {
   final BatchSelection _selection = BatchSelection();
+  final TextEditingController _searchController = TextEditingController();
+
+  /// 搜索词与分类筛选只影响列表显示，不写库、不发通知，所以放在 State 里即可。
+  String _term = '';
+  String? _category;
 
   List<EventOccurrence> _visible = const [];
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
     final onAdd = widget.onAdd;
     final today = CalendarEngine.dateOnly(DateTime.now());
-    final occurrences = controller.events
-        .map((event) => CalendarEngine.nextOccurrence(event, today))
-        .whereType<EventOccurrence>()
-        .toList();
+    // 自带记录与内置条目一起搜：写「春节」要能搜到官方春节假期。
+    // 控制器内部先按条件筛掉记录再算下一次发生，避免为被筛掉的记录白跑农历换算。
+    final occurrences = controller.searchOccurrences(
+      _term,
+      category: _category,
+      today: today,
+    );
     final upcoming = occurrences
         .where((item) => item.daysRemaining >= 0)
         .toList()
@@ -987,7 +1075,7 @@ class _ImportantDaysPageState extends State<ImportantDaysPage> {
               ),
               const SizedBox(height: 5),
               Text(
-                '你亲手记下的纪念日、生日和目标',
+                '纪念日、生日、目标，以及接下来的假期与节日',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
@@ -1008,8 +1096,56 @@ class _ImportantDaysPageState extends State<ImportantDaysPage> {
                 ],
               ),
               const SizedBox(height: 12),
+              TextField(
+                controller: _searchController,
+                onChanged: (value) => setState(() => _term = value),
+                textInputAction: TextInputAction.search,
+                decoration: InputDecoration(
+                  hintText: '搜索名称、备注或节日',
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  isDense: true,
+                  suffixIcon: _term.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: '清除搜索',
+                          icon: const Icon(Icons.close_rounded),
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() => _term = '');
+                          },
+                        ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              // 分类筛选：再点一次同一个分类即取消，_category 回到 null。
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    for (final category in kEventCategories)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: FilterChip(
+                          label: Text(category),
+                          selected: _category == category,
+                          onSelected: (selected) => setState(
+                            () => _category = selected ? category : null,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
               if (occurrences.isEmpty) ...[
-                _EmptyEvents(onAdd: onAdd),
+                _EmptyEvents(
+                  onAdd: onAdd,
+                  filtered: filtering,
+                  onClearFilter: filtering ? _clearFilter : null,
+                ),
               ] else ...[
                 if (upcoming.isNotEmpty) ...[
                   _SectionHeading(
@@ -1062,6 +1198,20 @@ class _ImportantDaysPageState extends State<ImportantDaysPage> {
       ],
         ),
       );
+  }
+
+  /// 是否正在按搜索词或分类筛选。用于区分「一条记录都没有」与
+  /// 「有记录但被筛空了」两种空态。
+  bool get filtering => _term.trim().isNotEmpty || _category != null;
+
+  /// 一次清掉搜索词与分类筛选。
+  void _clearFilter() {
+    if (!mounted) return;
+    _searchController.clear();
+    setState(() {
+      _term = '';
+      _category = null;
+    });
   }
 
   void _handleTap(EventOccurrence item) {
@@ -1479,7 +1629,7 @@ class SettingsPage extends StatelessWidget {
               contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
               leading: const Icon(Icons.notifications_active_outlined),
               title: const Text('本地提醒'),
-              subtitle: const Text('默认关闭 · 09:00 提醒 · 不需要网络'),
+              subtitle: const Text('默认关闭 · 时刻可逐条设置 · 不需要网络'),
               trailing: M3ESwitch(
                 value: controller.remindersEnabled,
                 onChanged: (value) async {
@@ -1505,16 +1655,30 @@ class SettingsPage extends StatelessWidget {
             child: Column(
               children: [
                 ListTile(
+                  leading: const Icon(Icons.save_alt_rounded),
+                  title: const Text('导出到文件'),
+                  subtitle: const Text('记录、内置条目改动与外观设置，存成 JSON 文件'),
+                  onTap: () => _exportBackupFile(context),
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
+                  leading: const Icon(Icons.folder_open_rounded),
+                  title: const Text('从文件导入'),
+                  subtitle: const Text('导入会替换本机的记录、改动与外观设置'),
+                  onTap: () => _importBackupFile(context),
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
                   leading: const Icon(Icons.copy_all_rounded),
-                  title: const Text('导出备份'),
-                  subtitle: const Text('记录、内置条目改动与外观设置，保存在剪贴板'),
+                  title: const Text('复制备份到剪贴板'),
+                  subtitle: const Text('临时转移用；剪贴板会被下一次复制冲掉'),
                   onTap: () => _copyBackup(context),
                 ),
                 const Divider(height: 1, indent: 56),
                 ListTile(
                   leading: const Icon(Icons.restore_rounded),
                   title: const Text('从剪贴板导入'),
-                  subtitle: const Text('导入会替换本机的记录、改动与外观设置'),
+                  subtitle: const Text('配合上面的复制操作使用'),
                   onTap: () => _restoreBackup(context),
                 ),
               ],
@@ -1747,6 +1911,43 @@ class SettingsPage extends StatelessWidget {
       return;
     }
     if (!context.mounted) return;
+    await _confirmAndImport(context, source);
+  }
+
+  Future<void> _exportBackupFile(BuildContext context) async {
+    try {
+      final done = await controller.exportToFile();
+      if (!context.mounted) return;
+      // 系统分享面板在 Android 上判断不了内容最终去了哪，所以只说「已交给系统」，
+      // 不承诺「已保存到某处」——那是在骗用户。
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(done ? '备份已交给系统保存。' : '已取消导出。'),
+        ),
+      );
+    } on Object catch (error) {
+      if (!context.mounted) return;
+      _showError('导出失败：$error');
+    }
+  }
+
+  Future<void> _importBackupFile(BuildContext context) async {
+    final String? source;
+    try {
+      source = await controller.importFromFile();
+    } on Object catch (error) {
+      if (!context.mounted) return;
+      _showError('读取备份失败：$error');
+      return;
+    }
+    // 用户在文件选择器上点了取消，不是错误，安静地什么都不做。
+    if (source == null) return;
+    if (!context.mounted) return;
+    await _confirmAndImport(context, source);
+  }
+
+  /// 文件与剪贴板两条来源共用同一段「确认 → 导入 → 反馈」。
+  Future<void> _confirmAndImport(BuildContext context, String source) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -1971,38 +2172,120 @@ Future<String?> showCategoryPicker(BuildContext context) =>
     );
 
 /// 统一改提醒。
-Future<int?> showReminderPicker(BuildContext context) =>
-    showModalBottomSheet<int>(
+///
+/// 改成有状态的弹层，是为了容纳「自定义天数」——一个纯函数弹层没法在
+/// 用户点开自定义时临时多出一个数字输入框。
+Future<int?> showReminderPicker(BuildContext context) => showModalBottomSheet<int>(
       context: context,
       showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('统一设置提醒',
-                  style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 6),
-              for (final option in const [
-                (-1, '关闭提醒'),
-                (0, '当天 09:00'),
-                (1, '提前 1 天 09:00'),
-                (7, '提前 7 天 09:00'),
-              ])
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  title: Text(option.$2),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => Navigator.pop(context, option.$1),
+      isScrollControlled: true,
+      builder: (context) => const _ReminderPickerSheet(),
+    );
+
+class _ReminderPickerSheet extends StatefulWidget {
+  const _ReminderPickerSheet();
+
+  @override
+  State<_ReminderPickerSheet> createState() => _ReminderPickerSheetState();
+}
+
+class _ReminderPickerSheetState extends State<_ReminderPickerSheet> {
+  final TextEditingController _custom = TextEditingController();
+  bool _askingCustom = false;
+
+  @override
+  void dispose() {
+    _custom.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          20,
+          0,
+          20,
+          24 + MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('统一设置提醒',
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 2),
+            // 批量只改提前量，不改时刻：各条记录自己的提醒时刻保持不变。
+            Text('只调整提前几天，各条记录原本的提醒时刻不变',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    )),
+            const SizedBox(height: 6),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: const Text('关闭提醒'),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => Navigator.pop(context, -1),
+            ),
+            for (final option in kReminderLeadOptions)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: Text(option.label),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () => Navigator.pop(context, option.days),
+              ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: const Text('自定义天数'),
+              trailing: Icon(
+                _askingCustom
+                    ? Icons.expand_less_rounded
+                    : Icons.chevron_right_rounded,
+              ),
+              onTap: () => setState(() => _askingCustom = !_askingCustom),
+            ),
+            if (_askingCustom) ...[
+              const SizedBox(height: 8),
+              TextField(
+                controller: _custom,
+                autofocus: true,
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(3),
+                ],
+                decoration: InputDecoration(
+                  labelText: '提前多少天提醒',
+                  helperText: '0 到 365 之间',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
                 ),
+                onSubmitted: (_) => _submit(),
+              ),
+              const SizedBox(height: 10),
+              M3EButton(
+                style: M3EButtonStyle.filled,
+                onPressed: _submit,
+                child: const Text('应用'),
+              ),
             ],
-          ),
+          ],
         ),
       ),
     );
+  }
+
+  void _submit() {
+    final days = int.tryParse(_custom.text.trim());
+    if (days == null || days < 0 || days > 365) return;
+    Navigator.pop(context, days);
+  }
+}
 
 /// 批量删除确认。
 Future<bool> confirmBulkDelete(BuildContext context, int count) async =>
