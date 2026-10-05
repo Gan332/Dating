@@ -113,17 +113,8 @@ jobs:
       - name: Static analysis
         run: flutter analyze
 
-      # TODO(诊断): 临时打开 verbose 并保留日志，等构建问题定位后改回普通构建
       - name: Build release APK
-        run: |
-          set -o pipefail
-          flutter build apk --release --verbose 2>&1 | tee /tmp/flutter-build.log \
-            | grep -aE "^> Task|FAILURE|BUILD |Caught|What went wrong|^e: |error:|\.apk" \
-            | tail -80 || true
-          echo "--- .apk found ---"
-          find "$GITHUB_WORKSPACE" -name '*.apk' -not -path '*/.git/*' | head -20
-          echo "--- gradle tasks (tail) ---"
-          grep -aE '^> Task' /tmp/flutter-build.log | tail -60 || true
+        run: flutter build apk --release
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
