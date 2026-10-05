@@ -368,11 +368,13 @@ class _HomePageState extends State<HomePage> {
     _visible = upcoming;
     final dateText = '${now.year}年${now.month}月${now.day}日';
 
-    return CustomScrollView(
-      slivers: [
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(22, 20, 22, 120),
-          sliver: SliverList.list(
+    return RefreshIndicator(
+      onRefresh: controller.refreshAll,
+      child: CustomScrollView(
+        slivers: [
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(22, 20, 22, 120),
+            sliver: SliverList.list(
             children: [
               if (_selection.active)
                 _SelectionBar(
@@ -504,6 +506,7 @@ class _HomePageState extends State<HomePage> {
           ),
         ),
       ],
+      ),
     );
   }
 
@@ -768,7 +771,8 @@ class _OccurrenceTile extends StatelessWidget {
     final subtitle = occurrence.subtitle +
         recurrenceLabel +
         (reminderDays >= 0 ? ' · 已提醒' : '');
-    return Card(
+    return _Pressable(
+      child: Card(
       margin: EdgeInsets.zero,
       elevation: 0,
       color: selected ? colors.secondaryContainer : colors.surfaceContainerLow,
@@ -869,6 +873,7 @@ class _OccurrenceTile extends StatelessWidget {
           ),
         ),
       ),
+      ),
     );
   }
 }
@@ -958,11 +963,13 @@ class _ImportantDaysPageState extends State<ImportantDaysPage> {
       });
     _visible = [...upcoming, ...past];
 
-    return CustomScrollView(
-      slivers: [
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(22, 22, 22, 120),
-          sliver: SliverList.list(
+            return RefreshIndicator(
+              onRefresh: controller.refreshAll,
+              child: CustomScrollView(
+                slivers: [
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(22, 22, 22, 120),
+                    sliver: SliverList.list(
             children: [
               if (_selection.active)
                 _SelectionBar(
@@ -1053,6 +1060,8 @@ class _ImportantDaysPageState extends State<ImportantDaysPage> {
           ),
         ),
       ],
+        ),
+      );
     );
   }
 
@@ -2229,6 +2238,41 @@ class _YearCountdownCard extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// 按下时轻微缩放，给卡片一点物理反馈；不影响水波纹。
+class _Pressable extends StatefulWidget {
+  const _Pressable({required this.child, this.scale = 0.97});
+
+  final Widget child;
+  final double scale;
+
+  @override
+  State<_Pressable> createState() => _PressableState();
+}
+
+class _PressableState extends State<_Pressable> {
+  bool _pressed = false;
+
+  void _setPressed(bool value) {
+    if (_pressed == value) return;
+    setState(() => _pressed = value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedScale(
+      scale: _pressed ? widget.scale : 1,
+      duration: M3EMotion.short2,
+      curve: Curves.easeOut,
+      child: Listener(
+        onPointerDown: (_) => _setPressed(true),
+        onPointerUp: (_) => _setPressed(false),
+        onPointerCancel: (_) => _setPressed(false),
+        child: widget.child,
+      ),
     );
   }
 }

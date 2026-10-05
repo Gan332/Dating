@@ -180,6 +180,16 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  /// 下拉刷新：重读本地数据，并顺手更新一次放假安排。
+  Future<void> refreshAll() async {
+    await _refresh();
+    try {
+      await refreshHolidays();
+    } on Object {
+      // 离线或数据源不可用时保持现有数据。
+    }
+  }
+
   /// 后台自动更新：失败就继续用现有数据，不打扰用户。
   Future<void> _silentHolidayRefresh() async {
     try {
