@@ -10,9 +10,12 @@ import '../models/countdown_event.dart';
 import 'event_editor.dart';
 
 class AppShell extends StatefulWidget {
-  const AppShell({super.key, required this.controller});
+  const AppShell({super.key, required this.controller, this.onRetry});
 
   final AppController controller;
+
+  /// 启动出错时横幅上的重试回调。
+  final VoidCallback? onRetry;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -29,7 +32,12 @@ class _AppShellState extends State<AppShell> {
       backgroundColor: Colors.transparent,
       builder: (_) => EventEditor(event: event),
     );
-    if (result != null) await widget.controller.saveEvent(result);
+    if (result == null) return;
+    try {
+      await widget.controller.saveEvent(result);
+    } catch (error) {
+      _showError('保存失败：$error');
+    }
   }
 
   Future<void> _deleteEvent(CountdownEvent event) async {
@@ -50,7 +58,20 @@ class _AppShellState extends State<AppShell> {
         ],
       ),
     );
-    if (confirmed == true) await widget.controller.deleteEvent(event.id);
+    if (confirmed == true) {
+      try {
+        await widget.controller.deleteEvent(event.id);
+      } catch (error) {
+        _showError('删除失败：$error');
+      }
+    }
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   @override
@@ -71,8 +92,17 @@ class _AppShellState extends State<AppShell> {
       ),
       SettingsPage(controller: widget.controller),
     ];
+    final loadError = widget.controller.loadError;
     return Scaffold(
-      body: SafeArea(child: IndexedStack(index: _tab, children: pages)),
+      body: Column(
+        children: [
+          if (loadError != null)
+            _StartupErrorBanner(message: loadError, onRetry: widget.onRetry),
+          Expanded(
+            child: SafeArea(child: IndexedStack(index: _tab, children: pages)),
+          ),
+        ],
+      ),
       floatingActionButton: _tab == 3
           ? null
           : M3EExtendedFab(
@@ -1219,5 +1249,38 @@ class SettingsPage extends StatelessWidget {
         const SnackBar(content: Text('无法读取备份，请确认内容完整。')),
       );
     }
+  }
+}
+
+/// 启动阶段的错误横幅：告知用户哪里没载入成功，并给一个重试入口。
+class _StartupErrorBanner extends StatelessWidget {
+  const _StartupErrorBanner({required this.message, this.onRetry});
+
+  final String message;
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Material(
+      color: colors.errorContainer,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+        child: Row(
+          children: [
+            Icon(Icons.error_outline_rounded, color: colors.onErrorContainer),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                '部分功能未能载入：$message',
+                style: TextStyle(color: colors.onErrorContainer, fontSize: 12),
+              ),
+            ),
+            if (onRetry != null)
+              TextButton(onPressed: onRetry, child: const Text('重试')),
+          ],
+        ),
+      ),
+    );
   }
 }

@@ -17,15 +17,15 @@ concurrency:
 jobs:
   build-apk:
     name: Build release APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
@@ -43,6 +43,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+          key: cargo-ndk
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
@@ -78,33 +84,34 @@ jobs:
           mkdir -p android/gradle/wrapper
           if [ -f android/gradlew ] && [ -f android/gradle/wrapper/gradle-wrapper.jar ]; then
             echo "Gradle wrapper already present."
-            exit 0
-          fi
-          # This repo intentionally does not track the wrapper; Flutter injects it during the
-          # build from its cached artifact. Copy it up front so the build never has to guess.
-          CACHE_DIR="$(dirname "$(dirname "$(readlink -f "$(command -v flutter)")")")/bin/cache/artifacts/gradle_wrapper"
-          if [ -d "$CACHE_DIR" ]; then
-            echo "Copying wrapper files from $CACHE_DIR"
-            cp -r "$CACHE_DIR/." android/
-          fi
-          # Fallback: take the scripts and jar from a throwaway `flutter create` project.
-          if [ ! -f android/gradlew ] || [ ! -f android/gradle/wrapper/gradle-wrapper.jar ]; then
-            echo "Scaffolding a temporary project to obtain the Gradle wrapper"
-            SCAFFOLD="$(mktemp -d)"
-            flutter create --no-pub --platforms=android --project-name daymark --org com.example "$SCAFFOLD/app" > /dev/null
-            cp "$SCAFFOLD/app/android/gradlew" "$SCAFFOLD/app/android/gradlew.bat" android/
-            cp "$SCAFFOLD/app/android/gradle/wrapper/gradle-wrapper.jar" android/gradle/wrapper/
-            rm -rf "$SCAFFOLD"
-          fi
-          # Never keep a copied gradle-wrapper.properties: Flutter writes the version that
-          # matches this project's Android Gradle Plugin when the file is missing.
-          if [ -f android/gradle/wrapper/gradle-wrapper.properties ]; then
+          else
+            # This repo intentionally does not track the wrapper; Flutter injects it during the
+            # build from its cached artifact. Copy it up front so the build never has to guess.
+            CACHE_DIR="$(dirname "$(dirname "$(readlink -f "$(command -v flutter)")")")/bin/cache/artifacts/gradle_wrapper"
+            if [ -d "$CACHE_DIR" ]; then
+              echo "Copying wrapper files from $CACHE_DIR"
+              cp -r "$CACHE_DIR/." android/
+            fi
+            # Fallback: take the scripts and jar from a throwaway `flutter create` project.
+            if [ ! -f android/gradlew ] || [ ! -f android/gradle/wrapper/gradle-wrapper.jar ]; then
+              echo "Scaffolding a temporary project to obtain the Gradle wrapper"
+              SCAFFOLD="$(mktemp -d)"
+              flutter create --no-pub --platforms=android --project-name daymark --org com.example "$SCAFFOLD/app" > /dev/null
+              cp "$SCAFFOLD/app/android/gradlew" "$SCAFFOLD/app/android/gradlew.bat" android/
+              cp "$SCAFFOLD/app/android/gradle/wrapper/gradle-wrapper.jar" android/gradle/wrapper/
+              rm -rf "$SCAFFOLD"
+            fi
+            # Never keep a copied gradle-wrapper.properties: Flutter writes the version that
+            # matches this project's Android Gradle Plugin when the file is missing.
             rm -f android/gradle/wrapper/gradle-wrapper.properties
           fi
           chmod +x android/gradlew
           test -f android/gradlew
           test -f android/gradle/wrapper/gradle-wrapper.jar
           echo "Gradle wrapper ready."
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Fetch Dart dependencies
         run: flutter pub get
@@ -113,11 +120,14 @@ jobs:
       - name: Static analysis
         run: flutter analyze
 
+      - name: Unit tests
+        run: flutter test
+
       - name: Build release APK
         run: flutter build apk --release
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: daymark-release-apk
           path: build/app/outputs/flutter-apk/app-release.apk

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -6,6 +7,11 @@ import 'ui/app_shell.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  // release 包里异常默认只进 logcat，这里再打一份，方便定位启动问题。
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    debugPrint('未捕获的界面异常：${details.exceptionAsString()}');
+  };
   runApp(const DaymarkApp());
 }
 
@@ -23,8 +29,11 @@ class _DaymarkAppState extends State<DaymarkApp> {
   void initState() {
     super.initState();
     _controller = AppController();
+    // load() 内部会兜住超时与异常，不会把启动流程挂住。
     _controller.load();
   }
+
+  void _retry() => _controller.reload();
 
   @override
   void dispose() {
@@ -50,10 +59,19 @@ class _DaymarkAppState extends State<DaymarkApp> {
         builder: (context, _) {
           if (!_controller.ready) {
             return const Scaffold(
-              body: Center(child: CircularProgressIndicator()),
+              body: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 18),
+                    Text('正在准备本地数据…'),
+                  ],
+                ),
+              ),
             );
           }
-          return AppShell(controller: _controller);
+          return AppShell(controller: _controller, onRetry: _retry);
         },
       ),
     );
