@@ -123,13 +123,30 @@ jobs:
       - name: Unit tests
         run: flutter test
 
+      # universal 包：兼容所有设备，但含两套原生库，体积最大。
       - name: Build release APK
         run: flutter build apk --release
 
-      - name: Upload APK artifact
+      # 单 ABI 包：只有一台机器的原生库，体积约为 universal 的三分之一。
+      - name: Build per-ABI APKs
+        run: flutter build apk --release --split-per-abi
+
+      # AAB：上架后由商店按设备 ABI/密度分发。
+      - name: Build App Bundle
+        run: flutter build appbundle --release
+
+      - name: Upload APK artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: daymark-release-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: daymark-apks
+          path: build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload App Bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: daymark-aab
+          path: build/app/outputs/bundle/release/*.aab
           if-no-files-found: error
           retention-days: 30

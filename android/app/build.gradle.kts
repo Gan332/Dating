@@ -1,5 +1,25 @@
 import org.gradle.api.tasks.Exec
 
+/**
+ * 只打包真机用的两套 ABI：一个包里塞三套原生库会让 APK 直接大三倍
+ * （实测 universal 59 MB vs 单 ABI 17~21 MB）。
+ * 需要 x86_64 模拟器包时：`-PdaymarkAbis=arm64-v8a,armeabi-v7a,x86_64`。
+ */
+val targetAbis: List<String> =
+    (project.findProperty("daymarkAbis") as String?)
+        ?.split(",")
+        ?.map(String::trim)
+        ?.filter(String::isNotEmpty)
+        ?.takeIf { it.isNotEmpty() }
+        ?: listOf("arm64-v8a", "armeabi-v7a")
+
+/** ABI → Rust 交叉编译三元组。 */
+val rustTriples = mapOf(
+    "arm64-v8a" to "aarch64-linux-android",
+    "armeabi-v7a" to "armv7-linux-androideabi",
+    "x86_64" to "x86_64-linux-android",
+)
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -28,6 +48,10 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         multiDexEnabled = true
+
+        ndk {
+            abiFilters += targetAbis
+        }
     }
 
     buildTypes {
@@ -55,16 +79,14 @@ tasks.register<Exec>("buildRustAndroid") {
     // 所以工作目录必须指向包含 Cargo.toml 的 rust/，不能只靠 --manifest-path
     // （否则报 “could not find Cargo.toml in ... or any parent directory”）。
     workingDir = rustDirectory
-    commandLine(
-        "cargo", "ndk",
-        "-t", "arm64-v8a",
-        "-t", "armeabi-v7a",
-        "-t", "x86_64",
-        "-o", nativeLibraries.absolutePath,
-        "build", "--release",
-    )
+    val args = mutableListOf("cargo", "ndk")
+    for (abi in targetAbis) {
+        args += listOf("-t", rustTriples[abi] ?: abi)
+    }
+    args += listOf("-o", nativeLibraries.absolutePath, "build", "--release")
+    commandLine(*args.toTypedArray())
     doLast {
-        val missing = listOf("arm64-v8a", "armeabi-v7a", "x86_64").filter { abi ->
+        val missing = targetAbis.filter { abi ->
             val dir = nativeLibraries.resolve(abi)
             dir.listFiles()?.none { it.name.endsWith(".so") } ?: true
         }
