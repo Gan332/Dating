@@ -1,0 +1,121 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-apk:
+    name: Build release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Precache Flutter Android artifacts
+        run: flutter precache --android || flutter precache
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Install Android NDK
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          FLUTTER_BIN="$(readlink -f "$(command -v flutter)")"
+          FLUTTER_ROOT="${FLUTTER_ROOT:-$(dirname "$(dirname "$FLUTTER_BIN")")}"
+          EXT="$FLUTTER_ROOT/packages/flutter_tools/gradle/src/main/kotlin/FlutterExtension.kt"
+          # flutter.ndkVersion is what android/app/build.gradle.kts asks AGP for.
+          NDK_VERSION="$(grep -E '^[[:space:]]*(const[[:space:]]+)?val[[:space:]]+ndkVersion' "$EXT" 2>/dev/null \
+            | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+          if [ -z "$NDK_VERSION" ]; then
+            NDK_VERSION="$(grep -m1 -oE 'ndkVersion[^0-9]*[0-9]+\.[0-9]+\.[0-9]+' "$EXT" 2>/dev/null \
+              | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+          fi
+          NDK_VERSION="${NDK_VERSION:-28.2.13676358}"
+          echo "Android NDK version required by Flutter: $NDK_VERSION"
+          if [ ! -d "$SDK_ROOT/ndk/$NDK_VERSION" ]; then
+            yes | sdkmanager --licenses > /dev/null || true
+            sdkmanager "ndk;$NDK_VERSION"
+          fi
+          NDK_DIR="$SDK_ROOT/ndk/$NDK_VERSION"
+          echo "Using NDK at $NDK_DIR"
+          echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$NDK_DIR" >> "$GITHUB_ENV"
+
+      - name: Ensure Gradle wrapper is available
+        run: |
+          set -euo pipefail
+          mkdir -p android/gradle/wrapper
+          if [ -f android/gradlew ] && [ -f android/gradle/wrapper/gradle-wrapper.jar ]; then
+            echo "Gradle wrapper already present."
+            exit 0
+          fi
+          # This repo intentionally does not track the wrapper; Flutter injects it during the
+          # build from its cached artifact. Copy it up front so the build never has to guess.
+          CACHE_DIR="$(dirname "$(dirname "$(readlink -f "$(command -v flutter)")")")/bin/cache/artifacts/gradle_wrapper"
+          if [ -d "$CACHE_DIR" ]; then
+            echo "Copying wrapper files from $CACHE_DIR"
+            cp -r "$CACHE_DIR/." android/
+          fi
+          # Fallback: take the scripts and jar from a throwaway `flutter create` project.
+          if [ ! -f android/gradlew ] || [ ! -f android/gradle/wrapper/gradle-wrapper.jar ]; then
+            echo "Scaffolding a temporary project to obtain the Gradle wrapper"
+            SCAFFOLD="$(mktemp -d)"
+            flutter create --no-pub --platforms=android --project-name daymark --org com.example "$SCAFFOLD/app" > /dev/null
+            cp "$SCAFFOLD/app/android/gradlew" "$SCAFFOLD/app/android/gradlew.bat" android/
+            cp "$SCAFFOLD/app/android/gradle/wrapper/gradle-wrapper.jar" android/gradle/wrapper/
+            rm -rf "$SCAFFOLD"
+          fi
+          # Never keep a copied gradle-wrapper.properties: Flutter writes the version that
+          # matches this project's Android Gradle Plugin when the file is missing.
+          if [ -f android/gradle/wrapper/gradle-wrapper.properties ]; then
+            rm -f android/gradle/wrapper/gradle-wrapper.properties
+          fi
+          chmod +x android/gradlew
+          test -f android/gradlew
+          test -f android/gradle/wrapper/gradle-wrapper.jar
+          echo "Gradle wrapper ready."
+
+      - name: Fetch Dart dependencies
+        run: flutter pub get
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: daymark-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 30
