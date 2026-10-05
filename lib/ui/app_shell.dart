@@ -167,7 +167,7 @@ class _AppShellState extends State<AppShell> {
         onEdit: _editOccurrence,
         onDelete: _deleteOccurrence,
       ),
-      CalendarPage(controller: widget.controller, onEdit: _editOccurrence),
+      CalendarPage(controller: widget.controller, onEdit: _editEventRecord),
       ImportantDaysPage(
         controller: widget.controller,
         onAdd: () => _editEvent(),
