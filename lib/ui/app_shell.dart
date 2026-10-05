@@ -1921,10 +1921,10 @@ class SettingsPage extends StatelessWidget {
       if (!context.mounted) return;
       // 系统分享面板在 Android 上判断不了内容最终去了哪，所以只说「已交给系统」，
       // 不承诺「已保存到某处」——那是在骗用户。
-      _toast(done ? '备份已交给系统保存。' : '已取消导出。');
+      _toast(context, done ? '备份已交给系统保存。' : '已取消导出。');
     } on Object catch (error) {
       if (!context.mounted) return;
-      _toast('导出失败：$error');
+      _toast(context, '导出失败：$error');
     }
   }
 
@@ -1934,7 +1934,7 @@ class SettingsPage extends StatelessWidget {
       source = await controller.readBackupFile();
     } on Object catch (error) {
       if (!context.mounted) return;
-      _toast('读取备份失败：$error');
+      _toast(context, '读取备份失败：$error');
       return;
     }
     // 用户在文件选择器上点了取消，不是错误，安静地什么都不做。
@@ -1943,7 +1943,8 @@ class SettingsPage extends StatelessWidget {
     await _confirmAndImport(context, source);
   }
 
-  void _toast(String message) => ScaffoldMessenger.of(context).showSnackBar(
+  void _toast(BuildContext context, String message) =>
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(message)),
       );
 
