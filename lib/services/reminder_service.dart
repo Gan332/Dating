@@ -45,8 +45,8 @@ class ReminderService {
           id: notificationId,
           title: event.title,
           body: event.reminderDays == 0
-              ? '今天是' + event.title
-              : '距' + event.title + '还有' + event.reminderDays.toString() + '天',
+              ? '今天是${event.title}'
+              : '距${event.title}还有${event.reminderDays}天',
           scheduledDate: timezone.TZDateTime.from(trigger, timezone.local),
           notificationDetails: const NotificationDetails(
             android: AndroidNotificationDetails(

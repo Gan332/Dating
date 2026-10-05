@@ -37,7 +37,7 @@ class _AppShellState extends State<AppShell> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('删除这条记录？'),
-        content: Text('“' + event.title + '”将从本机日历中移除。'),
+        content: Text('“${event.title}”将从本机日历中移除。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -138,7 +138,7 @@ class HomePage extends StatelessWidget {
           title: span.name,
           date: date,
           daysRemaining: CalendarEngine.daysBetween(today, date),
-          subtitle: HolidayCatalog.publishedYear.toString() + ' 官方假期',
+          subtitle: '${HolidayCatalog.publishedYear} 官方假期',
         ));
       }
     }
@@ -157,15 +157,13 @@ class HomePage extends StatelessWidget {
     }
     final customKeys = occurrences
         .where((item) => item.event != null)
-        .map((item) =>
-            item.title + ':' + CountdownEvent.dateKey(item.date))
+        .map((item) => '${item.title}:${CountdownEvent.dateKey(item.date)}')
         .toSet();
     final unique = <String, EventOccurrence>{};
     for (final item in occurrences) {
-      final contentKey =
-          item.title + ':' + CountdownEvent.dateKey(item.date);
+      final contentKey = '${item.title}:${CountdownEvent.dateKey(item.date)}';
       if (item.event case final event?) {
-        unique['event:' + event.id] = item;
+        unique['event:${event.id}'] = item;
       } else if (!customKeys.contains(contentKey)) {
         unique.putIfAbsent(contentKey, () => item);
       }
@@ -176,8 +174,7 @@ class HomePage extends StatelessWidget {
         if (comparison != 0) return comparison;
         return a.title.compareTo(b.title);
       });
-    final dateText = now.year.toString() + '年' +
-        now.month.toString() + '月' + now.day.toString() + '日';
+    final dateText = '${now.year}年${now.month}月${now.day}日';
 
     return CustomScrollView(
       slivers: [
@@ -358,8 +355,8 @@ class _HeroCountdown extends StatelessWidget {
                           style: const TextStyle(color: Colors.white70)),
                     ),
                     Text(
-                      item.date.month.toString().padLeft(2, '0') + '/' +
-                          item.date.day.toString().padLeft(2, '0'),
+                      '${item.date.month.toString().padLeft(2, '0')}/'
+                      '${item.date.day.toString().padLeft(2, '0')}',
                       style: const TextStyle(color: Colors.white70),
                     ),
                   ],
@@ -811,7 +808,7 @@ class _CalendarPageState extends State<CalendarPage> {
               Expanded(
                 child: Column(
                   children: [
-                    Text(_month.year.toString() + '年' + _month.month.toString() + '月',
+                    Text('${_month.year}年${_month.month}月',
                         style: Theme.of(context).textTheme.titleLarge?.copyWith(
                               fontWeight: FontWeight.w700,
                             )),
@@ -841,7 +838,7 @@ class _CalendarPageState extends State<CalendarPage> {
                 .map((label) => Expanded(
                       child: Center(
                         child: Text(label,
-                            style: TextStyle(fontWeight: FontWeight.w600)),
+                            style: const TextStyle(fontWeight: FontWeight.w600)),
                       ),
                     ))
                 .toList(),
@@ -958,14 +955,13 @@ class _CalendarPageState extends State<CalendarPage> {
                   children: [
                     Row(
                       children: [
-                        Text(_selected.month.toString() + '月' +
-                            _selected.day.toString() + '日',
+                        Text('${_selected.month}月${_selected.day}日',
                             style: Theme.of(context).textTheme.titleLarge?.copyWith(
                                   fontWeight: FontWeight.w700,
                                 )),
                         const SizedBox(width: 10),
-                        Text('农历' + selectedLunar.getMonthInChinese() +
-                            selectedLunar.getDayInChinese(),
+                        Text('农历${selectedLunar.getMonthInChinese()}'
+                            '${selectedLunar.getDayInChinese()}',
                             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                   color: colors.onSurfaceVariant,
                                 )),
@@ -979,7 +975,7 @@ class _CalendarPageState extends State<CalendarPage> {
                             : Icons.celebration_rounded,
                         label: isMakeupWorkday
                             ? '调休上班'
-                            : holiday! + '假期',
+                            : '${holiday!}假期',
                         color: isMakeupWorkday
                             ? colors.tertiary
                             : colors.error,
@@ -1145,7 +1141,7 @@ class SettingsPage extends StatelessWidget {
                   const SizedBox(height: 12),
                   const Text('当前内置 2026 年放假与调休上班安排。'),
                   const SizedBox(height: 5),
-                  Text(HolidayCatalog.source + '（' + HolidayCatalog.sourceDate + '）',
+                  Text('${HolidayCatalog.source}（${HolidayCatalog.sourceDate}）',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                             color: Theme.of(context).colorScheme.onSurfaceVariant,
                           )),
@@ -1187,6 +1183,7 @@ class SettingsPage extends StatelessWidget {
       );
       return;
     }
+    if (!context.mounted) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -1209,7 +1206,7 @@ class SettingsPage extends StatelessWidget {
       final count = await controller.importJson(source);
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已恢复' + count.toString() + '条记录。')),
+        SnackBar(content: Text('已恢复$count条记录。')),
       );
     } on FormatException catch (error) {
       if (!context.mounted) return;

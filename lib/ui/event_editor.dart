@@ -120,13 +120,12 @@ class _EventEditorState extends State<EventEditor> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: Text(
-                            _date.year.toString() + '年' + _date.month.toString() +
-                                '月' + _date.day.toString() + '日',
+                            '${_date.year}年${_date.month}月${_date.day}日',
                             style: Theme.of(context).textTheme.titleMedium,
                           ),
                         ),
-                        Text('农历' + lunar.getMonthInChinese() +
-                            lunar.getDayInChinese(),
+                        Text('农历${lunar.getMonthInChinese()}'
+                            '${lunar.getDayInChinese()}',
                             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                   color: colors.onSurfaceVariant,
                                 )),
@@ -152,8 +151,8 @@ class _EventEditorState extends State<EventEditor> {
                   ListTile(
                     contentPadding: EdgeInsets.zero,
                     title: const Text('按指定闰月重复'),
-                    subtitle: Text('农历' + lunar.getMonthInChinese() +
-                        lunar.getDayInChinese() + '；指定闰月当年缺失时跳过'),
+                    subtitle: Text('农历${lunar.getMonthInChinese()}'
+                        '${lunar.getDayInChinese()}；指定闰月当年缺失时跳过'),
                     trailing: M3ESwitch(
                       value: _leapMonth,
                       onChanged: (value) => setState(() => _leapMonth = value),
@@ -183,7 +182,7 @@ class _EventEditorState extends State<EventEditor> {
                 ),
                 const SizedBox(height: 16),
                 DropdownButtonFormField<int>(
-                  value: _reminderDays,
+                  initialValue: _reminderDays,
                   decoration: const InputDecoration(
                     labelText: '提醒',
                     prefixIcon: Icon(Icons.notifications_outlined),
@@ -255,9 +254,8 @@ class _EventEditorState extends State<EventEditor> {
     final existing = widget.event;
     final event = CountdownEvent(
       id: existing?.id ??
-          DateTime.now().microsecondsSinceEpoch.toString() +
-              '-' +
-              Random.secure().nextInt(1000000).toString(),
+          '${DateTime.now().microsecondsSinceEpoch}-'
+          '${Random.secure().nextInt(1000000)}',
       title: _titleController.text.trim(),
       date: DateTime(_date.year, _date.month, _date.day),
       recurrence: _recurrence,
