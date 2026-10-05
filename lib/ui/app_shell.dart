@@ -1533,17 +1533,59 @@ class SettingsPage extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  const Text('当前内置 2026 年放假与调休上班安排。'),
-                  const SizedBox(height: 5),
-                  Text('${HolidayCatalog.source}（${HolidayCatalog.sourceDate}）',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
-                          )),
+                  Text('数据来源：${controller.holidaySource}',
+                      style: Theme.of(context).textTheme.bodySmall),
+                  const SizedBox(height: 4),
+                  Text(
+                    controller.holidayFetchedAt == null
+                        ? '内置安排随应用发布，联网后会自动获取最新版本'
+                        : '更新于 ${_formatStamp(controller.holidayFetchedAt!)}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '${HolidayCatalog.sourceFor(HolidayCatalog.latestYear)}'
+                    '（${HolidayCatalog.sourceDate}）',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                  ),
                   const SizedBox(height: 8),
                   Text('其他年份只显示农历节日与节气；官方放假日期待正式公布后更新。',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                             color: Theme.of(context).colorScheme.onSurfaceVariant,
                           )),
+                  const SizedBox(height: 14),
+                  if (controller.holidayUpdating)
+                    const Row(
+                      children: [
+                        SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: M3ELoadingIndicator(size: 18),
+                        ),
+                        SizedBox(width: 10),
+                        Text('正在获取最新安排…'),
+                      ],
+                    )
+                  else
+                    M3EButton(
+                      style: M3EButtonStyle.tonal,
+                      onPressed: () => onMutate(
+                        controller.refreshHolidays,
+                        '已更新 ${HolidayCatalog.latestYear} 年放假安排',
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.cloud_sync_outlined),
+                          SizedBox(width: 8),
+                          Text('检查更新'),
+                        ],
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -1768,6 +1810,13 @@ class _StartupErrorBanner extends StatelessWidget {
   }
 }
 
+
+/// 时间戳：2026-02-15 09:30。
+String _formatStamp(DateTime value) {
+  String two(int n) => n.toString().padLeft(2, '0');
+  return '${value.year}-${two(value.month)}-${two(value.day)} '
+      '${two(value.hour)}:${two(value.minute)}';
+}
 
 /// 所有「改动类」操作的统一入口：执行动作，成功后弹一条可撤销的提示。
 typedef MutationRunner = Future<void> Function(

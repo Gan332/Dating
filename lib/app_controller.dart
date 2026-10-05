@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 import 'data/event_store.dart';
+import 'data/holiday_catalog.dart';
+import 'data/holiday_repository.dart';
 import 'data/settings_store.dart';
 import 'models/app_settings.dart';
 import 'models/countdown_event.dart';
@@ -28,10 +30,12 @@ class AppController extends ChangeNotifier {
     EventStore? store,
     ReminderScheduler? reminders,
     SettingsStore? settingsStore,
+    HolidayRepository? holidays,
     this.timeout = stepTimeout,
   })  : _store = store ?? EventStore(),
         _reminders = reminders ?? ReminderService.instance,
-        _settingsStore = settingsStore ?? SettingsStore();
+        _settingsStore = settingsStore ?? SettingsStore(),
+        _holidays = holidays ?? HolidayRepository();
 
   /// 单个启动步骤的上限。插件通道或文件系统一旦无响应，也要让界面出来，
   /// 而不是让用户对着启动转圈无限等待。
@@ -43,6 +47,7 @@ class AppController extends ChangeNotifier {
   final EventStore _store;
   final ReminderScheduler _reminders;
   final SettingsStore _settingsStore;
+  final HolidayRepository _holidays;
 
   List<CountdownEvent> _events = const [];
   final Map<String, DayOverride> _overrides = {};
@@ -52,6 +57,9 @@ class AppController extends ChangeNotifier {
   String? _loadError;
   _UndoSnapshot? _undoSnapshot;
   String _undoLabel = '';
+  bool _holidayUpdating = false;
+  String _holidaySource = '';
+  DateTime? _holidayFetchedAt;
 
   List<CountdownEvent> get events => _events;
   bool get ready => _ready;
@@ -73,6 +81,17 @@ class AppController extends ChangeNotifier {
 
   /// 上一步改动的描述，例如「删除 3 条」。
   String get undoLabel => _undoLabel;
+
+  /// 是否正在拉取在线放假安排。
+  bool get holidayUpdating => _holidayUpdating;
+
+  /// 放假安排的数据来源与更新时间。
+  String get holidaySource =>
+      _holidaySource.isEmpty ? '应用内置数据' : _holidaySource;
+
+  DateTime? get holidayFetchedAt => _holidayFetchedAt;
+
+  bool get hasOnlineHolidays => HolidayCatalog.hasOnlineData;
 
   /// 需要发送提醒的条目：自己记录里开着提醒的，加上被改动后设了提醒的内置条目。
   List<CountdownEvent> get _reminderCandidates {
@@ -105,6 +124,9 @@ class AppController extends ChangeNotifier {
       await _withTimeout(_loadCore(), '读取本地数据');
       // 提醒是可选能力，放到后台初始化：失败只降级，不阻塞界面。
       unawaited(_warmUpReminders());
+      // 在线放假安排先用缓存，后台再试一次更新。
+      unawaited(_applyCachedHolidays());
+      unawaited(_silentHolidayRefresh());
     } catch (error, stack) {
       _loadError = _describe(error);
       debugPrint('启动载入失败：$_loadError\n$stack');
@@ -138,6 +160,56 @@ class AppController extends ChangeNotifier {
       }
     } catch (error, stack) {
       debugPrint('提醒预热失败，应用继续使用：$error\n$stack');
+    }
+  }
+
+  Future<void> _applyCachedHolidays() async {
+    try {
+      final cached = await _holidays.loadCached();
+      if (cached == null) return;
+      HolidayCatalog.applyOnline(
+        cached.years,
+        source: cached.source,
+        fetchedAt: cached.fetchedAt,
+      );
+      _holidaySource = cached.source;
+      _holidayFetchedAt = cached.fetchedAt;
+      notifyListeners();
+    } catch (error) {
+      debugPrint('读取节假日缓存失败：$error');
+    }
+  }
+
+  /// 后台自动更新：失败就继续用现有数据，不打扰用户。
+  Future<void> _silentHolidayRefresh() async {
+    try {
+      await refreshHolidays();
+    } on Object {
+      // 离线或数据源不可用时静默忽略。
+    }
+  }
+
+  /// 拉取最新放假安排。失败时保持现有数据不动，并把错误抛给调用方展示。
+  Future<void> refreshHolidays() async {
+    if (_holidayUpdating) return;
+    _holidayUpdating = true;
+    notifyListeners();
+    try {
+      final snapshot = await _holidays.fetch(year: DateTime.now().year);
+      await _holidays.cache(snapshot);
+      HolidayCatalog.applyOnline(
+        snapshot.years,
+        source: snapshot.source,
+        fetchedAt: snapshot.fetchedAt,
+      );
+      _holidaySource = snapshot.source;
+      _holidayFetchedAt = snapshot.fetchedAt;
+    } catch (error) {
+      debugPrint('更新节假日数据失败：$error');
+      rethrow;
+    } finally {
+      _holidayUpdating = false;
+      notifyListeners();
     }
   }
 

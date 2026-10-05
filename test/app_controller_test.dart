@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:daymark/app_controller.dart';
 import 'package:daymark/data/event_store.dart';
+import 'package:daymark/data/holiday_repository.dart';
+import 'package:daymark/models/holiday_data.dart';
 import 'package:daymark/data/settings_store.dart';
 import 'package:daymark/models/app_settings.dart';
 import 'package:daymark/models/countdown_event.dart';
@@ -162,6 +164,21 @@ class _FakeReminders extends ReminderService {
   Future<void> scheduleEvents(List<CountdownEvent> events) async {}
 }
 
+/// 离线用的假数据源：测试里绝不联网。
+class _FakeHolidays extends HolidayRepository {
+  _FakeHolidays() : super(endpoints: const <String>[]);
+
+  @override
+  Future<HolidaySnapshot?> loadCached() async => null;
+
+  @override
+  Future<void> cache(HolidaySnapshot snapshot) async {}
+
+  @override
+  Future<HolidaySnapshot> fetch({required int year}) async =>
+      throw const HolidayUpdateException('测试环境离线');
+}
+
 CountdownEvent _event(String id, String title, {String category = '重要日'}) =>
     CountdownEvent(
       id: id,
@@ -181,6 +198,7 @@ void main() {
     final controller = AppController(
       store: store,
       reminders: reminders,
+      holidays: _FakeHolidays(),
       timeout: const Duration(milliseconds: 200),
     );
 
@@ -199,6 +217,7 @@ void main() {
     final controller = AppController(
       store: _FakeStore(),
       reminders: reminders,
+      holidays: _FakeHolidays(),
       timeout: const Duration(milliseconds: 200),
     );
 
@@ -214,6 +233,7 @@ void main() {
     final controller = AppController(
       store: store,
       reminders: _FakeReminders(),
+      holidays: _FakeHolidays(),
       timeout: const Duration(milliseconds: 100),
     );
 
@@ -229,6 +249,7 @@ void main() {
     final controller = AppController(
       store: store,
       reminders: _FakeReminders(),
+      holidays: _FakeHolidays(),
       timeout: const Duration(milliseconds: 200),
     );
 
@@ -245,6 +266,7 @@ void main() {
     final controller = AppController(
       store: store,
       reminders: reminders,
+      holidays: _FakeHolidays(),
       timeout: const Duration(milliseconds: 200),
     );
 
@@ -260,6 +282,7 @@ void main() {
     final controller = AppController(
       store: store,
       reminders: _FakeReminders(),
+      holidays: _FakeHolidays(),
       timeout: const Duration(milliseconds: 200),
     );
 
@@ -292,6 +315,7 @@ void main() {
     final controller = AppController(
       store: store,
       reminders: _FakeReminders(),
+      holidays: _FakeHolidays(),
       timeout: const Duration(milliseconds: 200),
     );
 
@@ -311,6 +335,7 @@ void main() {
     final controller = AppController(
       store: _FakeStore(),
       reminders: _FakeReminders(),
+      holidays: _FakeHolidays(),
       timeout: const Duration(milliseconds: 200),
     );
 
@@ -338,6 +363,7 @@ void main() {
     final controller = AppController(
       store: store,
       reminders: _FakeReminders(),
+      holidays: _FakeHolidays(),
       timeout: const Duration(milliseconds: 200),
     );
 
@@ -354,6 +380,7 @@ void main() {
     final other = AppController(
       store: _FakeStore(),
       reminders: _FakeReminders(),
+      holidays: _FakeHolidays(),
       timeout: const Duration(milliseconds: 200),
     );
     await other.load();
