@@ -2265,7 +2265,7 @@ class _PressableState extends State<_Pressable> {
   @override
   Widget build(BuildContext context) {
     return AnimatedScale(
-      scale: _pressed ? pressedScale : 1,
+      scale: _pressed ? _Pressable.pressedScale : 1,
       duration: M3EMotion.short2,
       curve: Curves.easeOut,
       child: Listener(
