@@ -1,5 +1,8 @@
 enum EventRecurrence { once, solarYearly, lunarYearly }
 
+/// 内置的分类选项，编辑器与批量修改共用。
+const List<String> kEventCategories = ['纪念日', '生日', '目标', '重要日', '其他'];
+
 class CountdownEvent {
   const CountdownEvent({
     required this.id,

@@ -1,6 +1,7 @@
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../models/countdown_event.dart';
 import '../models/day_override.dart';
 
 /// 编辑内置条目（官方节假日 / 传统节日）的结果。
@@ -43,8 +44,6 @@ class DayOverrideEditor extends StatefulWidget {
 }
 
 class _DayOverrideEditorState extends State<DayOverrideEditor> {
-  static const _categories = ['纪念日', '生日', '目标', '重要日', '其他'];
-
   late final TextEditingController _titleController;
   late final TextEditingController _noteController;
   late DateTime _date;
@@ -155,7 +154,7 @@ class _DayOverrideEditorState extends State<DayOverrideEditor> {
                 spacing: 8,
                 runSpacing: 4,
                 children: [
-                  for (final category in _categories)
+                  for (final category in kEventCategories)
                     ChoiceChip(
                       label: Text(category),
                       selected: _category == category,

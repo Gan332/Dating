@@ -6,6 +6,7 @@ import 'package:material_ui/material_ui.dart';
 import '../app_controller.dart';
 import '../core/calendar_engine.dart';
 import '../data/holiday_catalog.dart';
+import '../models/app_settings.dart';
 import '../models/countdown_event.dart';
 import 'day_override_editor.dart';
 import 'event_editor.dart';
@@ -34,44 +35,66 @@ class _AppShellState extends State<AppShell> {
       builder: (_) => EventEditor(event: event),
     );
     if (result == null) return;
-    try {
-      await widget.controller.saveEvent(result);
-    } catch (error) {
-      _showError('保存失败：$error');
-    }
-  }
-
-  Future<void> _deleteEvent(CountdownEvent event) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('删除这条记录？'),
-        content: Text('“${event.title}”将从本机日历中移除。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
-          ),
-          FilledButton.tonal(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('删除'),
-          ),
-        ],
-      ),
+    await _runMutation(
+      () => widget.controller.saveEvent(result),
+      '已保存「${result.title}」',
     );
-    if (confirmed == true) {
-      try {
-        await widget.controller.deleteEvent(event.id);
-      } catch (error) {
-        _showError('删除失败：$error');
-      }
-    }
   }
 
   void _showError(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
+    );
+  }
+
+  /// 所有改动的统一入口：出错弹提示，成功弹一条可撤销的提示。
+  Future<void> _runMutation(
+    Future<void> Function() action,
+    String label,
+  ) async {
+    try {
+      await action();
+      if (!mounted) return;
+      final controller = widget.controller;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(label),
+          action: controller.canUndo
+              ? SnackBarAction(label: '撤销', onPressed: _undoLast)
+              : null,
+        ),
+      );
+    } catch (error) {
+      _showError('$label失败：$error');
+    }
+  }
+
+  Future<void> _undoLast() async {
+    try {
+      await widget.controller.undo();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已撤销上一步改动')),
+      );
+    } catch (error) {
+      _showError('撤销失败：$error');
+    }
+  }
+
+  /// 编辑一条自带记录。
+  Future<void> _editEventRecord(CountdownEvent event) async {
+    final result = await showModalBottomSheet<CountdownEvent>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => EventEditor(event: event),
+    );
+    if (result == null) return;
+    await _runMutation(
+      () => widget.controller.saveEvent(result),
+      '已保存「${result.title}」',
     );
   }
 
@@ -97,32 +120,42 @@ class _AppShellState extends State<AppShell> {
       ),
     );
     if (result == null) return;
-    try {
-      if (result.restore) {
-        await widget.controller.restoreOverride(origin);
-      } else {
-        await widget.controller.saveOverride(result.override);
-      }
-    } catch (error) {
-      _showError('保存改动失败：$error');
+    if (result.restore) {
+      await _runMutation(
+        () => widget.controller.restoreOverride(origin),
+        '已恢复「${item.title}」的默认安排',
+      );
+    } else {
+      await _runMutation(
+        () => widget.controller.saveOverride(result.override),
+        '已保存对「${result.override.title}」的改动',
+      );
     }
   }
 
-  /// 编辑一条自带记录。
-  Future<void> _editEventRecord(CountdownEvent event) async {
-    final result = await showModalBottomSheet<CountdownEvent>(
+  Future<void> _deleteEvent(CountdownEvent event) async {
+    final confirmed = await showDialog<bool>(
       context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => EventEditor(event: event),
+      builder: (context) => AlertDialog(
+        title: const Text('删除这条记录？'),
+        content: Text('“${event.title}”将从本机日历中移除。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton.tonal(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
     );
-    if (result == null) return;
-    try {
-      await widget.controller.saveEvent(result);
-    } catch (error) {
-      _showError('保存失败：$error');
-    }
+    if (confirmed != true) return;
+    await _runMutation(
+      () => widget.controller.deleteEvent(event.id),
+      '已删除「${event.title}」',
+    );
   }
 
   /// 内置条目的「删除」即清除改动，回到公布时的状态。
@@ -151,11 +184,10 @@ class _AppShellState extends State<AppShell> {
       ),
     );
     if (confirmed != true) return;
-    try {
-      await widget.controller.restoreOverride(origin);
-    } catch (error) {
-      _showError('恢复失败：$error');
-    }
+    await _runMutation(
+      () => widget.controller.restoreOverride(origin),
+      '已恢复「${item.title}」的默认安排',
+    );
   }
 
   @override
@@ -166,6 +198,7 @@ class _AppShellState extends State<AppShell> {
         onAdd: () => _editEvent(),
         onEdit: _editOccurrence,
         onDelete: _deleteOccurrence,
+        onMutate: _runMutation,
       ),
       CalendarPage(controller: widget.controller, onEdit: _editEventRecord),
       ImportantDaysPage(
@@ -173,15 +206,19 @@ class _AppShellState extends State<AppShell> {
         onAdd: () => _editEvent(),
         onEdit: _editOccurrence,
         onDelete: _deleteOccurrence,
+        onMutate: _runMutation,
       ),
-      SettingsPage(controller: widget.controller),
+      SettingsPage(controller: widget.controller, onMutate: _runMutation),
     ];
     final loadError = widget.controller.loadError;
     return Scaffold(
       body: Column(
         children: [
           if (loadError != null)
-            _StartupErrorBanner(message: loadError, onRetry: widget.onRetry),
+            _StartupErrorBanner(
+              message: loadError,
+              onRetry: widget.onRetry,
+            ),
           Expanded(
             child: SafeArea(child: IndexedStack(index: _tab, children: pages)),
           ),
@@ -219,23 +256,36 @@ class _AppShellState extends State<AppShell> {
     );
   }
 }
-
-class HomePage extends StatelessWidget {
+class HomePage extends StatefulWidget {
   const HomePage({
     super.key,
     required this.controller,
     required this.onAdd,
     required this.onEdit,
     required this.onDelete,
+    required this.onMutate,
   });
 
   final AppController controller;
   final VoidCallback onAdd;
   final ValueChanged<EventOccurrence> onEdit;
   final ValueChanged<EventOccurrence> onDelete;
+  final MutationRunner onMutate;
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  final BatchSelection _selection = BatchSelection();
+
+  /// 当前列表里可见的条目，批量操作按它取选中项。
+  List<EventOccurrence> _visible = const [];
 
   @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
+    final onAdd = widget.onAdd;
     final now = DateTime.now();
     final today = CalendarEngine.dateOnly(now);
     final overrides = controller.overrides;
@@ -251,7 +301,8 @@ class HomePage extends StatelessWidget {
       final origin = CalendarEngine.holidayOrigin(span.name, span.start);
       final patch = overrides[origin];
       if (patch?.hidden ?? false) continue;
-      final date = patch?.date ?? (span.start.isBefore(today) ? today : span.start);
+      final date =
+          patch?.date ?? (span.start.isBefore(today) ? today : span.start);
       occurrences.add(EventOccurrence(
         title: patch?.title ?? span.name,
         date: date,
@@ -303,6 +354,7 @@ class HomePage extends StatelessWidget {
         if (comparison != 0) return comparison;
         return a.title.compareTo(b.title);
       });
+    _visible = upcoming;
     final dateText = '${now.year}年${now.month}月${now.day}日';
 
     return CustomScrollView(
@@ -311,39 +363,52 @@ class HomePage extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(22, 20, 22, 120),
           sliver: SliverList.list(
             children: [
-              Row(
-                children: [
-                  Container(
-                    width: 46,
-                    height: 46,
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.primaryContainer,
-                      borderRadius: BorderRadius.circular(17),
+              if (_selection.active)
+                _SelectionBar(
+                  count: _selection.countIn(upcoming),
+                  onCategory: _batchCategory,
+                  onReminder: _batchReminder,
+                  onDelete: _batchDelete,
+                  onClose: () => setState(_selection.clear),
+                )
+              else
+                Row(
+                  children: [
+                    Container(
+                      width: 46,
+                      height: 46,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(17),
+                      ),
+                      child: Icon(
+                        Icons.hourglass_bottom_rounded,
+                        color: Theme.of(context).colorScheme.onPrimaryContainer,
+                      ),
                     ),
-                    child: Icon(
-                      Icons.hourglass_bottom_rounded,
-                      color: Theme.of(context).colorScheme.onPrimaryContainer,
+                    const SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('拾日',
+                            style: Theme.of(context).textTheme.titleLarge),
+                        Text(dateText,
+                            style:
+                                Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onSurfaceVariant,
+                                    )),
+                      ],
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('拾日', style: Theme.of(context).textTheme.titleLarge),
-                      Text(dateText,
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                              )),
-                    ],
-                  ),
-                  const Spacer(),
-                  IconButton.filledTonal(
-                    tooltip: '添加重要日',
-                    onPressed: onAdd,
-                    icon: const Icon(Icons.add_rounded),
-                  ),
-                ],
-              ),
+                    const Spacer(),
+                    IconButton.filledTonal(
+                      tooltip: '添加重要日',
+                      onPressed: onAdd,
+                      icon: const Icon(Icons.add_rounded),
+                    ),
+                  ],
+                ),
               const SizedBox(height: 28),
               Text(
                 '把重要的日子，好好记住。',
@@ -403,13 +468,16 @@ class HomePage extends StatelessWidget {
                     padding: const EdgeInsets.only(bottom: 10),
                     child: _OccurrenceTile(
                       occurrence: item,
-                      onEdit: () => onEdit(item),
-                      onDelete: () => onDelete(item),
+                      selectionMode: _selection.active,
+                      selected: _selection.contains(item),
+                      onEdit: () => _handleTap(item),
+                      onLongPress: () => setState(() => _selection.select(item)),
+                      onDelete: () => widget.onDelete(item),
                     ),
                   ),
               const SizedBox(height: 8),
               Text(
-                '节假日安排基于已公布的官方数据，点条目可自行改动。',
+                '长按条目可多选批量改动。',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -421,8 +489,73 @@ class HomePage extends StatelessWidget {
       ],
     );
   }
-}
 
+  void _handleTap(EventOccurrence item) {
+    if (_selection.active) {
+      setState(() => _selection.toggle(item));
+      return;
+    }
+    widget.onEdit(item);
+  }
+
+  Future<void> _batchCategory() async {
+    final ids = _selection.eventIdsOf(_visible);
+    if (ids.isEmpty) {
+      _toast('批量改分类只对自己的记录生效');
+      return;
+    }
+    final category = await showCategoryPicker(context);
+    if (category == null) return;
+    await widget.onMutate(
+      () => widget.controller.updateEventsCategory(ids, category),
+      '已把 ${ids.length} 条改为「$category」',
+    );
+    _clearSelection();
+  }
+
+  Future<void> _batchReminder() async {
+    final ids = _selection.eventIdsOf(_visible);
+    if (ids.isEmpty) {
+      _toast('批量改提醒只对自己的记录生效');
+      return;
+    }
+    final days = await showReminderPicker(context);
+    if (days == null) return;
+    await widget.onMutate(
+      () => widget.controller.updateEventsReminder(ids, days),
+      '已更新 ${ids.length} 条的提醒',
+    );
+    _clearSelection();
+  }
+
+  Future<void> _batchDelete() async {
+    final ids = _selection.eventIdsOf(_visible);
+    final origins = _selection.originsOf(_visible);
+    if (ids.isEmpty && origins.isEmpty) return;
+    final confirmed = await confirmBulkDelete(context, ids.length + origins.length);
+    if (confirmed != true) return;
+    await widget.onMutate(
+      () async {
+        if (ids.isNotEmpty) await widget.controller.deleteEvents(ids);
+        if (origins.isNotEmpty) await widget.controller.restoreOverrides(origins);
+      },
+      '已删除 ${ids.length} 条、恢复 ${origins.length} 条内置安排',
+    );
+    _clearSelection();
+  }
+
+  void _clearSelection() {
+    if (!mounted) return;
+    setState(_selection.clear);
+  }
+
+  void _toast(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+}
 class _HeroCountdown extends StatelessWidget {
   const _HeroCountdown({required this.occurrence, required this.onAdd});
 
@@ -584,11 +717,17 @@ class _OccurrenceTile extends StatelessWidget {
     required this.occurrence,
     this.onEdit,
     this.onDelete,
+    this.onLongPress,
+    this.selectionMode = false,
+    this.selected = false,
   });
 
   final EventOccurrence occurrence;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
+  final VoidCallback? onLongPress;
+  final bool selectionMode;
+  final bool selected;
 
   @override
   Widget build(BuildContext context) {
@@ -610,35 +749,43 @@ class _OccurrenceTile extends StatelessWidget {
     return Card(
       margin: EdgeInsets.zero,
       elevation: 0,
-      color: colors.surfaceContainerLow,
+      color: selected ? colors.secondaryContainer : colors.surfaceContainerLow,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       child: InkWell(
         onTap: onEdit,
+        onLongPress: onLongPress,
         borderRadius: BorderRadius.circular(24),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(15, 13, 10, 13),
           child: Row(
             children: [
-              Container(
-                width: 48,
-                height: 54,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: colors.secondaryContainer,
-                  borderRadius: BorderRadius.circular(16),
+              if (selectionMode)
+                Checkbox(
+                  value: selected,
+                  onChanged: (_) => onEdit?.call(),
+                )
+              else
+                Container(
+                  width: 48,
+                  height: 54,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: colors.secondaryContainer,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(date.month.toString().padLeft(2, '0'),
+                          style: Theme.of(context).textTheme.labelSmall),
+                      Text(date.day.toString(),
+                          style:
+                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  )),
+                    ],
+                  ),
                 ),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(date.month.toString().padLeft(2, '0'),
-                        style: Theme.of(context).textTheme.labelSmall),
-                    Text(date.day.toString(),
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            )),
-                  ],
-                ),
-              ),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
@@ -667,11 +814,11 @@ class _OccurrenceTile extends StatelessWidget {
                   Text(
                     daysRemaining == 0 ? '今天' : daysRemaining.abs().toString(),
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      color: daysRemaining < 0
-                          ? colors.onSurfaceVariant
-                          : colors.primary,
-                      fontWeight: FontWeight.w700,
-                    ),
+                          color: daysRemaining < 0
+                              ? colors.onSurfaceVariant
+                              : colors.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
                   ),
                   if (daysRemaining != 0)
                     Text(
@@ -680,7 +827,7 @@ class _OccurrenceTile extends StatelessWidget {
                     ),
                 ],
               ),
-              if (onDelete != null)
+              if (onDelete != null && !selectionMode)
                 PopupMenuButton<String>(
                   tooltip: '更多操作',
                   onSelected: (value) {
@@ -691,7 +838,8 @@ class _OccurrenceTile extends StatelessWidget {
                     const PopupMenuItem(value: 'edit', child: Text('编辑')),
                     PopupMenuItem(
                       value: 'delete',
-                      child: Text(occurrence.origin == null ? '删除' : '恢复默认'),
+                      child:
+                          Text(occurrence.origin == null ? '删除' : '恢复默认'),
                     ),
                   ],
                 ),
@@ -702,7 +850,6 @@ class _OccurrenceTile extends StatelessWidget {
     );
   }
 }
-
 class _EmptyEvents extends StatelessWidget {
   const _EmptyEvents({required this.onAdd});
 
@@ -739,22 +886,35 @@ class _EmptyEvents extends StatelessWidget {
   );
 }
 
-class ImportantDaysPage extends StatelessWidget {
+class ImportantDaysPage extends StatefulWidget {
   const ImportantDaysPage({
     super.key,
     required this.controller,
     required this.onAdd,
     required this.onEdit,
     required this.onDelete,
+    required this.onMutate,
   });
 
   final AppController controller;
   final VoidCallback onAdd;
   final ValueChanged<EventOccurrence> onEdit;
   final ValueChanged<EventOccurrence> onDelete;
+  final MutationRunner onMutate;
+
+  @override
+  State<ImportantDaysPage> createState() => _ImportantDaysPageState();
+}
+
+class _ImportantDaysPageState extends State<ImportantDaysPage> {
+  final BatchSelection _selection = BatchSelection();
+
+  List<EventOccurrence> _visible = const [];
 
   @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
+    final onAdd = widget.onAdd;
     final today = CalendarEngine.dateOnly(DateTime.now());
     final occurrences = controller.events
         .map((event) => CalendarEngine.nextOccurrence(event, today))
@@ -774,6 +934,7 @@ class ImportantDaysPage extends StatelessWidget {
         final byDate = b.daysRemaining.compareTo(a.daysRemaining);
         return byDate != 0 ? byDate : a.title.compareTo(b.title);
       });
+    _visible = [...upcoming, ...past];
 
     return CustomScrollView(
       slivers: [
@@ -781,6 +942,14 @@ class ImportantDaysPage extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(22, 22, 22, 120),
           sliver: SliverList.list(
             children: [
+              if (_selection.active)
+                _SelectionBar(
+                  count: _selection.countIn(_visible),
+                  onCategory: _batchCategory,
+                  onReminder: _batchReminder,
+                  onDelete: _batchDelete,
+                  onClose: () => setState(_selection.clear),
+                ),
               Text(
                 '重要日',
                 style: Theme.of(context).textTheme.headlineMedium?.copyWith(
@@ -822,8 +991,12 @@ class ImportantDaysPage extends StatelessWidget {
                   for (final item in upcoming) ...[
                     _OccurrenceTile(
                       occurrence: item,
-                      onEdit: () => onEdit(item),
-                      onDelete: () => onDelete(item),
+                      selectionMode: _selection.active,
+                      selected: _selection.contains(item),
+                      onEdit: () => _handleTap(item),
+                      onLongPress: () =>
+                          setState(() => _selection.select(item)),
+                      onDelete: () => widget.onDelete(item),
                     ),
                     const SizedBox(height: 10),
                   ],
@@ -835,8 +1008,12 @@ class ImportantDaysPage extends StatelessWidget {
                   for (final item in past) ...[
                     _OccurrenceTile(
                       occurrence: item,
-                      onEdit: () => onEdit(item),
-                      onDelete: () => onDelete(item),
+                      selectionMode: _selection.active,
+                      selected: _selection.contains(item),
+                      onEdit: () => _handleTap(item),
+                      onLongPress: () =>
+                          setState(() => _selection.select(item)),
+                      onDelete: () => widget.onDelete(item),
                     ),
                     const SizedBox(height: 10),
                   ],
@@ -848,8 +1025,61 @@ class ImportantDaysPage extends StatelessWidget {
       ],
     );
   }
-}
 
+  void _handleTap(EventOccurrence item) {
+    if (_selection.active) {
+      setState(() => _selection.toggle(item));
+      return;
+    }
+    widget.onEdit(item);
+  }
+
+  Future<void> _batchCategory() async {
+    final ids = _selection.eventIdsOf(_visible);
+    if (ids.isEmpty) return;
+    final category = await showCategoryPicker(context);
+    if (category == null) return;
+    await widget.onMutate(
+      () => widget.controller.updateEventsCategory(ids, category),
+      '已把 ${ids.length} 条改为「$category」',
+    );
+    _clearSelection();
+  }
+
+  Future<void> _batchReminder() async {
+    final ids = _selection.eventIdsOf(_visible);
+    if (ids.isEmpty) return;
+    final days = await showReminderPicker(context);
+    if (days == null) return;
+    await widget.onMutate(
+      () => widget.controller.updateEventsReminder(ids, days),
+      '已更新 ${ids.length} 条的提醒',
+    );
+    _clearSelection();
+  }
+
+  Future<void> _batchDelete() async {
+    final ids = _selection.eventIdsOf(_visible);
+    final origins = _selection.originsOf(_visible);
+    if (ids.isEmpty && origins.isEmpty) return;
+    final confirmed =
+        await confirmBulkDelete(context, ids.length + origins.length);
+    if (confirmed != true) return;
+    await widget.onMutate(
+      () async {
+        if (ids.isNotEmpty) await widget.controller.deleteEvents(ids);
+        if (origins.isNotEmpty) await widget.controller.restoreOverrides(origins);
+      },
+      '已删除 ${ids.length} 条、恢复 ${origins.length} 条内置安排',
+    );
+    _clearSelection();
+  }
+
+  void _clearSelection() {
+    if (!mounted) return;
+    setState(_selection.clear);
+  }
+}
 class _SectionHeading extends StatelessWidget {
   const _SectionHeading({required this.title, required this.count});
 
@@ -1185,9 +1415,14 @@ class _DetailPill extends StatelessWidget {
 }
 
 class SettingsPage extends StatelessWidget {
-  const SettingsPage({super.key, required this.controller});
+  const SettingsPage({
+    super.key,
+    required this.controller,
+    required this.onMutate,
+  });
 
   final AppController controller;
+  final MutationRunner onMutate;
 
   @override
   Widget build(BuildContext context) => ListView(
@@ -1221,6 +1456,9 @@ class SettingsPage extends StatelessWidget {
               ),
             ),
           ),
+          _undoCard(),
+          const SizedBox(height: 10),
+          _themeCard(),
           const SizedBox(height: 10),
           Card(
             elevation: 0,
@@ -1230,15 +1468,15 @@ class SettingsPage extends StatelessWidget {
               children: [
                 ListTile(
                   leading: const Icon(Icons.copy_all_rounded),
-                  title: const Text('复制 JSON 备份'),
-                  subtitle: const Text('备份保存在剪贴板，可粘贴到安全位置'),
+                  title: const Text('导出备份'),
+                  subtitle: const Text('记录、内置条目改动与外观设置，保存在剪贴板'),
                   onTap: () => _copyBackup(context),
                 ),
                 const Divider(height: 1, indent: 56),
                 ListTile(
                   leading: const Icon(Icons.restore_rounded),
-                  title: const Text('从剪贴板恢复'),
-                  subtitle: const Text('恢复会替换本机当前的自定义记录'),
+                  title: const Text('从剪贴板导入'),
+                  subtitle: const Text('导入会替换本机的记录、改动与外观设置'),
                   onTap: () => _restoreBackup(context),
                 ),
               ],
@@ -1290,6 +1528,125 @@ class SettingsPage extends StatelessWidget {
         ],
       );
 
+  Widget _undoCard() {
+    final canUndo = controller.canUndo;
+    return Card(
+      elevation: 0,
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
+        leading: const Icon(Icons.undo_rounded),
+        title: const Text('撤销上一步改动'),
+        subtitle: Text(
+          canUndo ? '上一步：${controller.undoLabel}' : '暂时没有可撤销的改动',
+        ),
+        trailing: canUndo ? const Icon(Icons.chevron_right_rounded) : null,
+        onTap: canUndo
+            ? () => onMutate(controller.undo, '已撤销上一步改动')
+            : null,
+      ),
+    );
+  }
+
+  Widget _themeCard() {
+    final settings = controller.settings;
+    final colors = Theme.of(context).colorScheme;
+    return Card(
+      elevation: 0,
+      color: colors.surfaceContainerLow,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.palette_outlined),
+                const SizedBox(width: 12),
+                Text('外观',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        )),
+              ],
+            ),
+            const SizedBox(height: 14),
+            M3ESegmentedButton<AppThemeMode>(
+              segments: const [
+                M3ESegment(value: AppThemeMode.system, label: '跟随系统'),
+                M3ESegment(value: AppThemeMode.light, label: '浅色'),
+                M3ESegment(value: AppThemeMode.dark, label: '深色'),
+              ],
+              selected: {settings.themeMode},
+              onSelectionChanged: (selection) => onMutate(
+                () => controller.updateSettings(
+                  settings.copyWith(themeMode: selection.first),
+                ),
+                '已切换外观',
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text('配色', style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                for (final seed in AppSeed.values)
+                  Tooltip(
+                    message: seed.label,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(24),
+                      onTap: () => onMutate(
+                        () => controller.updateSettings(
+                          settings.copyWith(seed: seed),
+                        ),
+                        '已更换配色',
+                      ),
+                      child: Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Color(seed.colorValue),
+                          border: Border.all(
+                            color: seed == settings.seed
+                                ? colors.onSurface
+                                : Colors.transparent,
+                            width: 3,
+                          ),
+                        ),
+                        child: seed == settings.seed
+                            ? const Icon(
+                                Icons.check_rounded,
+                                size: 18,
+                                color: Colors.white,
+                              )
+                            : null,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: settings.useDynamicColor,
+              onChanged: (value) => onMutate(
+                () => controller.updateSettings(
+                  settings.copyWith(useDynamicColor: value),
+                ),
+                '已更新取色方式',
+              ),
+              title: const Text('跟随系统取色'),
+              subtitle: const Text('Android 12 及以上使用壁纸配色'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _copyBackup(BuildContext context) async {
     final value = await controller.exportJson();
     await Clipboard.setData(ClipboardData(text: value));
@@ -1314,7 +1671,7 @@ class SettingsPage extends StatelessWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('替换本机记录？'),
-        content: const Text('恢复备份会覆盖当前所有自定义重要日。'),
+        content: const Text('导入会覆盖本机的记录、内置条目改动与外观设置。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -1380,3 +1737,203 @@ class _StartupErrorBanner extends StatelessWidget {
     );
   }
 }
+
+
+/// 所有「改动类」操作的统一入口：执行动作，成功后弹一条可撤销的提示。
+typedef MutationRunner = Future<void> Function(
+  Future<void> Function() action,
+  String label,
+);
+
+/// 多选状态：长按条目进入多选，之后可批量改分类、提醒或删除。
+class BatchSelection {
+  final Set<String> keys = <String>{};
+
+  bool get active => keys.isNotEmpty;
+
+  /// 条目在多选里的稳定标识：自带记录用记录 id，内置条目用 origin。
+  static String keyOf(EventOccurrence item) =>
+      item.event != null ? 'event:${item.event!.id}' : 'origin:${item.origin}';
+
+  bool contains(EventOccurrence item) => keys.contains(keyOf(item));
+
+  void select(EventOccurrence item) => keys.add(keyOf(item));
+
+  void toggle(EventOccurrence item) =>
+      keys.contains(keyOf(item)) ? keys.remove(keyOf(item)) : keys.add(keyOf(item));
+
+  void clear() => keys.clear();
+
+  int countIn(Iterable<EventOccurrence> items) => items.where(contains).length;
+
+  /// 选中的自带记录 id。
+  List<String> eventIdsOf(Iterable<EventOccurrence> items) {
+    final ids = <String>[];
+    for (final item in items) {
+      if (!contains(item)) continue;
+      if (item.event case final event?) ids.add(event.id);
+    }
+    return ids;
+  }
+
+  /// 选中的内置条目标识。
+  List<String> originsOf(Iterable<EventOccurrence> items) {
+    final origins = <String>[];
+    for (final item in items) {
+      if (!contains(item)) continue;
+      if (item.origin case final origin?) origins.add(origin);
+    }
+    return origins;
+  }
+}
+
+/// 多选模式下的批量操作条。
+class _SelectionBar extends StatelessWidget {
+  const _SelectionBar({
+    required this.count,
+    required this.onCategory,
+    required this.onReminder,
+    required this.onDelete,
+    required this.onClose,
+  });
+
+  final int count;
+  final VoidCallback onCategory;
+  final VoidCallback onReminder;
+  final VoidCallback onDelete;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Card(
+      elevation: 0,
+      margin: const EdgeInsets.only(bottom: 10),
+      color: colors.secondaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
+        child: Row(
+          children: [
+            Icon(Icons.checklist_rounded, color: colors.onSecondaryContainer),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                '已选 $count 项',
+                style: TextStyle(
+                  color: colors.onSecondaryContainer,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            IconButton(
+              tooltip: '统一改分类',
+              onPressed: onCategory,
+              icon: const Icon(Icons.sell_outlined),
+            ),
+            IconButton(
+              tooltip: '统一改提醒',
+              onPressed: onReminder,
+              icon: const Icon(Icons.notifications_none_rounded),
+            ),
+            IconButton(
+              tooltip: '删除选中',
+              onPressed: onDelete,
+              icon: const Icon(Icons.delete_outline_rounded),
+            ),
+            IconButton(
+              tooltip: '退出多选',
+              onPressed: onClose,
+              icon: const Icon(Icons.close_rounded),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 统一改分类。
+Future<String?> showCategoryPicker(BuildContext context) =>
+    showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('统一改成', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final category in kEventCategories)
+                    ActionChip(
+                      label: Text(category),
+                      onPressed: () => Navigator.pop(context, category),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+/// 统一改提醒。
+Future<int?> showReminderPicker(BuildContext context) =>
+    showModalBottomSheet<int>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('统一设置提醒',
+                  style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 6),
+              for (final option in const [
+                (-1, '关闭提醒'),
+                (0, '当天 09:00'),
+                (1, '提前 1 天 09:00'),
+                (7, '提前 7 天 09:00'),
+              ])
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: Text(option.$2),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => Navigator.pop(context, option.$1),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+/// 批量删除确认。
+Future<bool> confirmBulkDelete(BuildContext context, int count) async =>
+    await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除选中的条目？'),
+        content: Text('共 $count 项；内置条目会恢复成公布的安排。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    ) ??
+    false;

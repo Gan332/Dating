@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:sqflite/sqflite.dart';
 
 import '../models/countdown_event.dart';
@@ -149,22 +147,39 @@ class EventStore {
     );
   }
 
-  Future<String> exportJson() async {
+  /// 备份内容。设置由控制器补进去，这样一份文件覆盖记录 + 改动 + 设置。
+  Future<Map<String, Object?>> exportPayload() async {
     final events = await allEvents();
     final overrides = await allOverrides();
-    return const JsonEncoder.withIndent('  ').convert({
+    return {
       'format': 'daymark.backup',
       'version': 1,
       'exportedAt': DateTime.now().toIso8601String(),
       'events': events.map((event) => event.toMap()).toList(),
       'overrides': overrides.map((override) => override.toMap()).toList(),
+    };
+  }
+
+  /// 全量替换，用于撤销上一步改动。
+  Future<void> replaceAll(
+    List<CountdownEvent> events,
+    List<DayOverride> overrides,
+  ) async {
+    final database = await _db;
+    await database.transaction((transaction) async {
+      await transaction.delete('events');
+      await transaction.delete('day_overrides');
+      for (final event in events) {
+        await transaction.insert('events', event.toMap());
+      }
+      for (final override in overrides) {
+        await transaction.insert('day_overrides', override.toMap());
+      }
     });
   }
 
-  Future<int> importJson(String source) async {
-    final decoded = jsonDecode(source);
-    if (decoded is! Map<String, dynamic> ||
-        decoded['format'] != 'daymark.backup' ||
+  Future<int> importPayload(Map<String, dynamic> decoded) async {
+    if (decoded['format'] != 'daymark.backup' ||
         decoded['version'] != 1 ||
         decoded['events'] is! List) {
       throw const FormatException('备份格式无法识别');
@@ -188,7 +203,6 @@ class EventStore {
     }
 
     final overrides = _readOverrides(decoded);
-
     final database = await _db;
     await database.transaction((transaction) async {
       await transaction.delete('events');

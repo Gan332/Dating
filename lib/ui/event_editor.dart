@@ -25,8 +25,6 @@ class _EventEditorState extends State<EventEditor> {
   late int _reminderDays;
   late bool _leapMonth;
 
-  static const _categories = ['纪念日', '生日', '目标', '重要日', '其他'];
-
   @override
   void initState() {
     super.initState();
@@ -172,7 +170,7 @@ class _EventEditorState extends State<EventEditor> {
                   spacing: 8,
                   runSpacing: 4,
                   children: [
-                    for (final category in _categories)
+                    for (final category in kEventCategories)
                       ChoiceChip(
                         label: Text(category),
                         selected: _category == category,
