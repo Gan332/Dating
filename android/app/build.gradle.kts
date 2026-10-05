@@ -48,9 +48,16 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         multiDexEnabled = true
+    }
 
-        ndk {
-            abiFilters += targetAbis
+    // 一个包里塞多套原生库会让 APK 直接变大好几倍（实测 59 MB vs 单 ABI 19 MB），
+    // 所以同时产出 universal 与单 ABI 包；上架 AAB 时商店也会按 ABI 再分发。
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include(*targetAbis.toTypedArray())
+            isUniversalApk = true
         }
     }
 

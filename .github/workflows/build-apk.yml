@@ -123,13 +123,9 @@ jobs:
       - name: Unit tests
         run: flutter test
 
-      # universal 包：兼容所有设备，但含两套原生库，体积最大。
-      - name: Build release APK
+      # 一次构建同时产出 universal 与单 ABI 包（ABI 拆分配在 build.gradle.kts）。
+      - name: Build release APKs
         run: flutter build apk --release
-
-      # 单 ABI 包：只有一台机器的原生库，体积约为 universal 的三分之一。
-      - name: Build per-ABI APKs
-        run: flutter build apk --release --split-per-abi
 
       # AAB：上架后由商店按设备 ABI/密度分发。
       - name: Build App Bundle
