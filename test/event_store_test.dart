@@ -5,7 +5,6 @@ import 'package:daymark/data/event_store.dart';
 import 'package:daymark/models/countdown_event.dart';
 import 'package:daymark/models/day_override.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 /// 一份真实的老备份：完全由手写 JSON 字面量构成，没有 `reminderHour` 键，
@@ -108,7 +107,7 @@ void main() {
     });
 
     test('保存后读回每个字段都不丢', () async {
-      const event = CountdownEvent(
+      final event = CountdownEvent(
         id: 'full',
         title: '完整字段',
         date: DateTime(2026, 3, 1),
@@ -231,7 +230,7 @@ void main() {
 
   group('内置条目改动记录', () {
     test('保存后能读回全部字段', () async {
-      const override = DayOverride(
+      final override = DayOverride(
         origin: 'holiday:春节:2026-02-15',
         title: '春节（改过）',
         date: DateTime(2026, 2, 16),

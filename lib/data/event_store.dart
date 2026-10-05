@@ -9,9 +9,9 @@ class EventStore {
   /// [databasePath] 只给测试用。应用运行期库文件固定在 `getDatabasesPath()` 下，
   /// 但 `sqflite_common_ffi` 在纯 Dart 环境里那个目录并不可用，不注入路径就没法
   /// 让单测跑真实 SQL。留空时行为与从前完全一致。
-  EventStore({String? databasePath}) : _databasePath = databasePath;
+  EventStore({this.databasePath});
 
-  final String? _databasePath;
+  final String? databasePath;
 
   static const int _schemaVersion = 3;
 
@@ -52,7 +52,7 @@ class EventStore {
     final current = _database;
     if (current != null) return current;
     final path =
-        _databasePath ?? '${await getDatabasesPath()}/daymark_events.db';
+        databasePath ?? '${await getDatabasesPath()}/daymark_events.db';
     final db = await openDatabase(
       path,
       version: _schemaVersion,

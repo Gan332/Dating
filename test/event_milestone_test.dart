@@ -6,7 +6,7 @@ void main() {
   group('milestoneFor 一次性事件', () {
     // 2019-06-15 到 2026-06-15 一共 7 个公历年，其中 2019→2020 与 2023→2024 两段
     // 各含一个闰日，所以是 7×365+2 = 2557 天。
-    const birthday = CountdownEvent(
+    final birthday = CountdownEvent(
       id: 'friend-birthday',
       title: '好友生日',
       date: DateTime(2019, 6, 15),
@@ -56,7 +56,7 @@ void main() {
   });
 
   group('milestoneFor 公历年度重复', () {
-    const wedding = CountdownEvent(
+    final wedding = CountdownEvent(
       id: 'wedding',
       title: '结婚纪念日',
       date: DateTime(2019, 6, 15),
@@ -107,7 +107,7 @@ void main() {
   group('milestoneFor 闰日事件', () {
     // occurrences() 会把 2 月 29 日在平年夹到 2 月 28 日，里程碑必须跟着这个夹取
     // 后的日子走，否则会整整少算一年。
-    const leapDay = CountdownEvent(
+    final leapDay = CountdownEvent(
       id: 'leap-day',
       title: '闰日纪念',
       date: DateTime(2024, 2, 29),
@@ -243,7 +243,7 @@ void main() {
 
   group('milestoneFor 输入讲不通时', () {
     test('发生日早于事件原始日期返回 null', () {
-      const event = CountdownEvent(
+      final event = CountdownEvent(
         id: 'wedding',
         title: '结婚纪念日',
         date: DateTime(2019, 6, 15),
@@ -328,7 +328,7 @@ void main() {
     });
 
     test('闰日夹到平年之后的天数与周年一起上屏', () {
-      const leapDay = CountdownEvent(
+      final leapDay = CountdownEvent(
         id: 'leap-day',
         title: '闰日纪念',
         date: DateTime(2024, 2, 29),

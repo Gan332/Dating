@@ -2,7 +2,7 @@ import 'package:daymark/models/countdown_event.dart';
 import 'package:daymark/models/day_override.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-const DateTime _date = DateTime(2026, 3, 1);
+final DateTime _date = DateTime(2026, 3, 1);
 
 /// `reminderHour` 决定提醒当天几点弹通知，用户直接看得见，而且数据来自用户自己
 /// 的备份文件，所以「缺字段」和「越界值」的处理必须稳定：缺字段回落到默认的 9 点，
@@ -52,7 +52,7 @@ void main() {
     });
 
     test('toMap 写出提醒时刻，copyWith 可改且不动原对象', () {
-      const event = CountdownEvent(
+      final event = CountdownEvent(
         id: 'e1',
         title: '示例',
         date: _date,
@@ -100,7 +100,7 @@ void main() {
     });
 
     test('toMap 写出提醒时刻，copyWith 可改且不动原对象', () {
-      const override = DayOverride(
+      final override = DayOverride(
         origin: 'holiday:春节:2026-02-15',
         title: '春节',
         date: _date,

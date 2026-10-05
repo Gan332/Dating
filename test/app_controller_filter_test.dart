@@ -55,7 +55,7 @@ class _FakeStore extends EventStore {
     if (failImport) throw const FormatException('备份内容不完整');
     events
       ..clear()
-      ..add(const CountdownEvent(
+      ..add(CountdownEvent(
         id: 'x',
         title: '来自文件',
         date: DateTime(2026, 1, 1),
@@ -114,7 +114,7 @@ class _FakeHolidays extends HolidayRepository {
       throw const HolidayUpdateException('测试环境离线');
 }
 
-const List<CountdownEvent> _seed = [
+final List<CountdownEvent> _seed = [
   CountdownEvent(
     id: 'e1',
     title: 'Anniversary',

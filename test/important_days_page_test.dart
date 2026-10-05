@@ -63,7 +63,7 @@ class _FakeHolidays extends HolidayRepository {
 /// 固定的三条记录，跨年份各占一头，好让「接下来」和「已经走过」两段都有内容。
 /// 备注里同时埋了中文词「花」和英文词 Marathon，分别用来验证跨分类搜索与
 /// 忽略大小写。
-const List<CountdownEvent> _fixture = [
+final List<CountdownEvent> _fixture = [
   CountdownEvent(
     id: 'e1',
     title: '结婚纪念日',

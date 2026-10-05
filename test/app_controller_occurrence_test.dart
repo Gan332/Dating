@@ -16,13 +16,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 假期已经开始的那天：用它验证「倒数十天」不会因为区间已开始而变成负数。
-const DateTime _insideSpringFestival = DateTime(2026, 2, 18);
+final DateTime _insideSpringFestival = DateTime(2026, 2, 18);
 
 /// 春节假期开始前的那天：内置条目都还没到点。
-const DateTime _beforeSpringFestival = DateTime(2026, 2, 10);
+final DateTime _beforeSpringFestival = DateTime(2026, 2, 10);
 
 /// 国庆假期前、且不在任何已公布区间里的那天。
-const DateTime _beforeNationalDay = DateTime(2026, 9, 20);
+final DateTime _beforeNationalDay = DateTime(2026, 9, 20);
 
 String _originOf(HolidaySpan span) =>
     CalendarEngine.holidayOrigin(span.name, span.start);
@@ -412,7 +412,7 @@ void main() {
       store = _FakeStore([
         _event('e1', '发薪日', DateTime(2026, 2, 12)),
         _event('e2', '体检', DateTime(2026, 2, 20)),
-        const CountdownEvent(
+        CountdownEvent(
           id: 'e3',
           title: '妈妈生日',
           date: DateTime(2026, 12, 3),
@@ -588,7 +588,7 @@ void main() {
         _event('e2', '体检', DateTime(2027, 1, 8)),
       ]);
       await store.saveOverride(
-        const DayOverride(
+        DayOverride(
           origin: 'holiday:中秋节:2026-09-25',
           title: '中秋节',
           date: DateTime(2026, 9, 25),
@@ -644,7 +644,7 @@ void main() {
     test('从文件恢复之后记录与改动都换成备份里的内容', () async {
       final source = _FakeStore([_event('a', '妈妈生日', DateTime(2026, 12, 3))]);
       await source.saveOverride(
-        const DayOverride(
+        DayOverride(
           origin: 'holiday:国庆节:2026-10-01',
           title: '国庆长假',
           date: DateTime(2026, 10, 1),
@@ -668,7 +668,12 @@ void main() {
       final controller = _controller(store, gateway);
       await controller.load();
 
-      final count = await controller.importFromFile();
+      // 读文件本身不导入：界面要先拿文本让用户确认，确认之后才调 importJson。
+      final backupText = await controller.readBackupFile();
+      expect(backupText, isNotNull);
+      expect(controller.events.map((event) => event.id), ['old']);
+
+      final count = await controller.importJson(backupText!);
 
       expect(count, 1);
       expect(controller.events.map((event) => event.id), ['a']);
@@ -681,7 +686,7 @@ void main() {
       final controller = _controller(store, gateway);
       await controller.load();
 
-      expect(await controller.importFromFile(), isNull);
+      expect(await controller.readBackupFile(), isNull);
       expect(controller.events.map((event) => event.id), ['old']);
       expect(controller.canUndo, isFalse);
     });
@@ -692,7 +697,7 @@ void main() {
       await controller.load();
 
       await expectLater(
-        controller.importFromFile(),
+        controller.readBackupFile(),
         throwsA(
           isA<BackupFileException>().having(
             (e) => e.message,

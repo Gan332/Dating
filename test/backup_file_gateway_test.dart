@@ -233,7 +233,7 @@ void main() {
         const AppSettings(seed: AppSeed.amber, useDynamicColor: true),
       );
       await store.saveOverride(
-        const DayOverride(
+        DayOverride(
           origin: 'festival:春节',
           title: '春节',
           date: DateTime(2026, 2, 17),
@@ -264,7 +264,7 @@ void main() {
     test('导入：网关读回的文本原样恢复出记录、改动与设置', () async {
       final source = _FakeStore([_event('a', '生日'), _event('b', '纪念日')]);
       await source.saveOverride(
-        const DayOverride(
+        DayOverride(
           origin: 'festival:春节',
           title: '春节（改）',
           date: DateTime(2026, 2, 17),
@@ -352,7 +352,7 @@ void main() {
     }
 
     /// 这些用例只关心导入，分享面板一律假装成功。
-    BackupShareInvoker _sharedOk() =>
+    BackupShareInvoker sharedOk() =>
         (params) async => const ShareResult('', ShareResultStatus.success);
 
     test('导出会把原文按 UTF-8 交给分享面板，文件名与 MIME 类型都对', () async {
@@ -424,7 +424,7 @@ void main() {
 
     test('导入：取消选择返回 null，不当成失败', () async {
       final gateway = PluginBackupFileGateway(
-        share: _sharedOk(),
+        share: sharedOk(),
         pick: () async => null,
       );
 
@@ -435,7 +435,7 @@ void main() {
       const content = '  {"format":"daymark.backup"}\n';
       final path = writeTempFile('backup.json', content);
       final gateway = PluginBackupFileGateway(
-        share: _sharedOk(),
+        share: sharedOk(),
         pick: () async => path,
       );
 
@@ -445,7 +445,7 @@ void main() {
     test('导入：只有空白字符的文件等同于取消', () async {
       final path = writeTempFile('blank.json', '\n\t  ');
       final gateway = PluginBackupFileGateway(
-        share: _sharedOk(),
+        share: sharedOk(),
         pick: () async => path,
       );
 
@@ -455,7 +455,7 @@ void main() {
     test('导入：选择器打不开时抛中文异常，并带上原始错误', () async {
       final error = PlatformException(code: 'PickFailed');
       final gateway = PluginBackupFileGateway(
-        share: _sharedOk(),
+        share: sharedOk(),
         pick: () async => throw error,
       );
 
@@ -472,7 +472,7 @@ void main() {
     test('导入：文件读不了时抛中文异常，而不是把 IO 错误漏给界面', () async {
       final missing = '${tempDir.path}${Platform.pathSeparator}missing.json';
       final gateway = PluginBackupFileGateway(
-        share: _sharedOk(),
+        share: sharedOk(),
         pick: () async => missing,
       );
 
@@ -490,7 +490,7 @@ void main() {
 
     test('导入：选择器自己抛出的中文异常不会被二次包装', () async {
       final gateway = PluginBackupFileGateway(
-        share: _sharedOk(),
+        share: sharedOk(),
         pick: () async =>
             throw const BackupFileException('这个备份文件读不了，请换一个文件试试。'),
       );

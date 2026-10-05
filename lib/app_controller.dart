@@ -548,26 +548,25 @@ class AppController extends ChangeNotifier {
   ///
   /// 返回 `false` 表示用户在面板上点了取消，没有产生任何后果。
   /// 真正做不成时抛 [BackupFileException]，消息能直接展示。
-  Future<bool> exportToFile({DateTime? now}) =>
-      _withTimeout(
-        _backupFiles.exportText(
-          exportJson(),
-          filename: backupFilename(now ?? DateTime.now()),
-        ),
-        '导出备份',
-      );
-
-  /// 从文件恢复。用户取消选择时返回 `null`，不当作错误。
-  ///
-  /// 返回导入的记录条数。
-  Future<int?> importFromFile() async {
-    final source = await _withTimeout(
-      _backupFiles.importText(),
-      '读取备份文件',
+  Future<bool> exportToFile({DateTime? now}) async {
+    // exportJson 是异步的（要读一次库），所以这里必须 await，不能把 Future
+    // 直接塞给网关的 String 参数。
+    final content = await exportJson();
+    return _withTimeout(
+      _backupFiles.exportText(
+        content,
+        filename: backupFilename(now ?? DateTime.now()),
+      ),
+      '导出备份',
     );
-    if (source == null) return null;
-    return importJson(source);
   }
+
+  /// 只把备份文件读出来，**不导入**。用户取消选择时返回 `null`，不当作错误。
+  ///
+  /// 刻意和 [importJson] 分开：导入会整份替换本机数据，必须先让用户确认，
+  /// 所以界面拿到的先是文本，确认之后才调 [importJson]。
+  Future<String?> readBackupFile() =>
+      _withTimeout(_backupFiles.importText(), '读取备份文件');
 
   // ------------------------------------------------------------ 内部工具
 

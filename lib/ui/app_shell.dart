@@ -673,7 +673,7 @@ class _HeroCountdown extends StatelessWidget {
                 ),
                 // 已经过去多少天、第几周年。倒数日应用最打动人的是「相伴多久」，
                 // 算不出来时整行不出现。
-                if (_milestoneOf(item) case final text?) ...[
+                if (_milestoneTextOf(item) case final text?) ...[
                   const SizedBox(height: 6),
                   Text(
                     text,
@@ -722,15 +722,18 @@ class _HeroCountdown extends StatelessWidget {
     return CalendarEngine.approachProgress(event, item.date, today);
   }
 
-  /// 里程碑文案（已过天数 + 周年）；算不出来时返回 null，调用方据此整行隐藏。
-  String? _milestoneOf(EventOccurrence item) {
-    final event = item.event;
-    if (event == null) return null;
-    final milestone = CalendarEngine.milestoneFor(event, item.date);
-    if (milestone == null) return null;
-    final text = CalendarEngine.milestoneSummary(milestone);
-    return text.isEmpty ? null : text;
-  }
+}
+
+/// 里程碑文案（已过天数 + 周年）；算不出来时返回 null，调用方据此整行隐藏。
+///
+/// 首页大卡片与列表条目共用这一个实现，免得两处对「算不出」的口径不一致。
+String? _milestoneTextOf(EventOccurrence item) {
+  final event = item.event;
+  if (event == null) return null;
+  final milestone = CalendarEngine.milestoneFor(event, item.date);
+  if (milestone == null) return null;
+  final text = CalendarEngine.milestoneSummary(milestone);
+  return text.isEmpty ? null : text;
 }
 
 class _QuickStat extends StatelessWidget {
@@ -805,10 +808,9 @@ class _OccurrenceTile extends StatelessWidget {
         (reminderDays >= 0 ? ' · 已提醒' : '');
 
     // 只有自带记录才有「从最初那一天算起」的意义：内置条目的 date 就是它
-    // 本身，算出来只会是一句没有信息量的「今天就是这一天」。
-    final milestone = event == null
-        ? null
-        : CalendarEngine.milestoneFor(event, date);
+    // 本身，算出来只会是一句没有信息量的「今天就是这一天」。算不出时为 null，
+    // 整行不渲染。
+    final milestoneText = _milestoneTextOf(occurrence);
     return _Pressable(
       child: Card(
       margin: EdgeInsets.zero,
@@ -868,9 +870,8 @@ class _OccurrenceTile extends StatelessWidget {
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                               color: colors.onSurfaceVariant,
                             )),
-                    // 已经过去多少天、第几周年——只有自带记录算得出来，
-                    // 内置条目的 date 就是它本身，算出来只会是「今天就是这一天」。
-                    if (milestone case final text?) ...[
+                    // 已经过去多少天、第几周年；算不出来时整行不出现。
+                    if (milestoneText case final text?) ...[
                       const SizedBox(height: 2),
                       Text(text,
                           maxLines: 1,
@@ -1920,24 +1921,20 @@ class SettingsPage extends StatelessWidget {
       if (!context.mounted) return;
       // 系统分享面板在 Android 上判断不了内容最终去了哪，所以只说「已交给系统」，
       // 不承诺「已保存到某处」——那是在骗用户。
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(done ? '备份已交给系统保存。' : '已取消导出。'),
-        ),
-      );
+      _toast(done ? '备份已交给系统保存。' : '已取消导出。');
     } on Object catch (error) {
       if (!context.mounted) return;
-      _showError('导出失败：$error');
+      _toast('导出失败：$error');
     }
   }
 
   Future<void> _importBackupFile(BuildContext context) async {
     final String? source;
     try {
-      source = await controller.importFromFile();
+      source = await controller.readBackupFile();
     } on Object catch (error) {
       if (!context.mounted) return;
-      _showError('读取备份失败：$error');
+      _toast('读取备份失败：$error');
       return;
     }
     // 用户在文件选择器上点了取消，不是错误，安静地什么都不做。
@@ -1945,6 +1942,10 @@ class SettingsPage extends StatelessWidget {
     if (!context.mounted) return;
     await _confirmAndImport(context, source);
   }
+
+  void _toast(String message) => ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
 
   /// 文件与剪贴板两条来源共用同一段「确认 → 导入 → 反馈」。
   Future<void> _confirmAndImport(BuildContext context, String source) async {
