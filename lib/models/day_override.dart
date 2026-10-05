@@ -12,6 +12,7 @@ class DayOverride {
     required this.reminderDays,
     this.reminderHour = 9,
     this.hidden = false,
+    this.coverPath,
   });
 
   /// 内置条目的稳定标识，例如 `holiday:春节:2026-02-15`。
@@ -36,6 +37,10 @@ class DayOverride {
   /// 是否把这条内置条目从界面里隐藏。
   final bool hidden;
 
+  /// 封面图在应用私有目录里的文件名（不含路径）；语义见 [CountdownEvent.coverPath]，
+  /// 内置条目改动与自带记录共用同一套图片文件约定。
+  final String? coverPath;
+
   DayOverride copyWith({
     String? title,
     DateTime? date,
@@ -44,6 +49,7 @@ class DayOverride {
     int? reminderDays,
     int? reminderHour,
     bool? hidden,
+    String? coverPath,
   }) {
     return DayOverride(
       origin: origin,
@@ -54,6 +60,7 @@ class DayOverride {
       reminderDays: reminderDays ?? this.reminderDays,
       reminderHour: reminderHour ?? this.reminderHour,
       hidden: hidden ?? this.hidden,
+      coverPath: coverPath ?? this.coverPath,
     );
   }
 
@@ -66,6 +73,7 @@ class DayOverride {
         'reminderDays': reminderDays,
         'reminderHour': reminderHour,
         'hidden': hidden ? 1 : 0,
+        'coverPath': coverPath,
       };
 
   factory DayOverride.fromMap(Map<String, Object?> map) {
@@ -82,6 +90,11 @@ class DayOverride {
       reminderHour: hour,
       reminderDays: (map['reminderDays'] as num?)?.toInt() ?? -1,
       hidden: ((map['hidden'] as num?)?.toInt() ?? 0) == 1,
+      // 与 CountdownEvent 一样把空串归一成「没有封面」。
+      coverPath: switch (map['coverPath']) {
+        final String path when path.trim().isNotEmpty => path,
+        _ => null,
+      },
     );
   }
 }

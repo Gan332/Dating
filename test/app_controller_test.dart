@@ -15,21 +15,25 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// 存储的假实现，可以模拟“永远不返回”和“直接抛错”两种坏情况。
 class _FakeStore extends EventStore {
   _FakeStore([List<CountdownEvent>? events])
-      : events = events ??
-            [
-              CountdownEvent(
-                id: 'e1',
-                title: '春节',
-                date: DateTime(2026, 2, 17),
-                recurrence: EventRecurrence.once,
-                category: '节日',
-                note: '',
-                reminderDays: -1,
-              ),
-            ];
+      : events = List.of(events ?? _defaultEvents);
 
+  static final List<CountdownEvent> _defaultEvents = [
+    CountdownEvent(
+      id: 'e1',
+      title: '春节',
+      date: DateTime(2026, 2, 17),
+      recurrence: EventRecurrence.once,
+      category: '节日',
+      note: '',
+      reminderDays: -1,
+    ),
+  ];
+
+  /// 记录列表。构造时拷贝一份：分类改名会原地替换 `events[index]`，直接持有
+  /// 调用方给的那份列表，一个用例就会改到别人的数据上去。
   final List<CountdownEvent> events;
   final List<DayOverride> savedOverrides = [];
+  List<String> categories = const [];
   final List<String> deleted = [];
   final List<String> updated = [];
   bool hangForever = false;
@@ -73,13 +77,6 @@ class _FakeStore extends EventStore {
   }
 
   @override
-  Future<void> updateEventsCategory(List<String> ids, String category) async {
-    for (final event in events) {
-      if (ids.contains(event.id)) updated.add('${event.id}:$category');
-    }
-  }
-
-  @override
   Future<void> updateEventsReminder(List<String> ids, int reminderDays) async {
     for (final event in events) {
       if (ids.contains(event.id)) updated.add('${event.id}:$reminderDays');
@@ -92,6 +89,9 @@ class _FakeStore extends EventStore {
         'version': 1,
         'events': events.map((event) => event.toMap()).toList(),
         'overrides': savedOverrides.map((item) => item.toMap()).toList(),
+        'categories': categories.isEmpty
+            ? EventStore.defaultCategories
+            : categories,
       };
 
   @override
@@ -120,18 +120,54 @@ class _FakeStore extends EventStore {
   @override
   Future<void> replaceAll(
     List<CountdownEvent> restoredEvents,
-    List<DayOverride> restoredOverrides,
-  ) async {
+    List<DayOverride> restoredOverrides, {
+    List<String>? categories,
+  }) async {
     events
       ..clear()
       ..addAll(restoredEvents);
     savedOverrides
       ..clear()
       ..addAll(restoredOverrides);
+    if (categories != null && categories.isNotEmpty) {
+      this.categories = List.of(categories);
+    }
   }
 
   @override
   Future<void> save(CountdownEvent event) async {}
+
+  @override
+  Future<List<String>> allCategories() async =>
+      categories.isEmpty ? EventStore.defaultCategories : categories;
+
+  @override
+  Future<void> replaceCategories(List<String> names) async {
+    categories = List.of(names);
+  }
+
+  @override
+  Future<void> updateEventsCategory(List<String> ids, String category) async {
+    for (final event in events) {
+      if (ids.contains(event.id)) updated.add('${event.id}:$category');
+    }
+    // 真的把记录挪过去：分类改动的撤销用例要看 store 里剩下的记录，
+    // 只记一条日志的话撤销后无从验证记录是否回到了原分类。
+    for (final (index, event) in [...events.indexed]) {
+      if (ids.contains(event.id)) {
+        events[index] = event.copyWith(category: category);
+      }
+    }
+  }
+
+  @override
+  Future<void> saveOverrides(Iterable<DayOverride> overrides) async {
+    for (final override in overrides) {
+      savedOverrides
+        ..removeWhere((item) => item.origin == override.origin)
+        ..add(override);
+    }
+  }
 }
 
 /// 提醒的假实现：hangForever 用来模拟通知插件通道不返回。
@@ -186,6 +222,19 @@ CountdownEvent _event(String id, String title, {String category = '重要日'}) 
       date: DateTime(2026, 6, 1),
       category: category,
     );
+
+/// 起一个已经载入完成的控制器。分类相关的用例要反复搭同一个壳，
+/// 抄一遍注入参数只会让用例本身淹没在样板里。
+Future<AppController> _started(EventStore store) async {
+  final controller = AppController(
+    store: store,
+    reminders: _FakeReminders(),
+    holidays: _FakeHolidays(),
+    timeout: const Duration(milliseconds: 200),
+  );
+  await controller.load();
+  return controller;
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -329,6 +378,142 @@ void main() {
     await controller.undo();
     expect(controller.overrideFor('holiday:春节:2026-02-15')?.title, '大年初一');
     controller.dispose();
+  });
+
+  group('分类的增删改', () {
+    test('新增分类后进入清单，可撤销', () async {
+      final controller = await _started(_FakeStore());
+      expect(controller.categories, EventStore.defaultCategories);
+
+      expect(await controller.addCategory('旅行'), isTrue);
+
+      expect(controller.categories.last, '旅行');
+      expect(controller.canUndo, isTrue);
+      expect(controller.undoLabel, contains('旅行'));
+
+      await controller.undo();
+
+      expect(controller.categories, EventStore.defaultCategories);
+      controller.dispose();
+    });
+
+    test('重名、空名与超长名都返回 false，不落库', () async {
+      final controller = await _started(_FakeStore());
+
+      expect(await controller.addCategory('  '), isFalse);
+      expect(await controller.addCategory(List.filled(21, '长').join()), isFalse);
+      // 内置清单里已经有「生日」了。
+      expect(await controller.addCategory('  生日  '), isFalse);
+
+      expect(controller.categories, EventStore.defaultCategories);
+      expect(
+        controller.canUndo,
+        isFalse,
+        reason: '什么都没改成，就不该留下一个可撤销的快照',
+      );
+      controller.dispose();
+    });
+
+    test('改名时挂在上面的记录跟着改，可撤销', () async {
+      final store = _FakeStore([_event('a', '约定', category: '纪念日')]);
+      final controller = await _started(store);
+
+      expect(await controller.renameCategory('纪念日', '我们的日子'), isTrue);
+
+      expect(
+        controller.categories,
+        [...EventStore.defaultCategories]..[0] = '我们的日子',
+      );
+      expect(
+        (await store.allEvents()).single.category,
+        '我们的日子',
+        reason: '改名不搬家的话，那批记录就落在一个选不出来的分类上',
+      );
+
+      await controller.undo();
+
+      expect(controller.categories, EventStore.defaultCategories);
+      expect(
+        (await store.allEvents()).single.category,
+        '纪念日',
+        reason: '撤销要把记录和清单一起还原',
+      );
+      controller.dispose();
+    });
+
+    test('删除分类时记录挪到「其他」，可撤销', () async {
+      final store = _FakeStore([_event('a', '约定', category: '纪念日')]);
+      final controller = await _started(store);
+
+      expect(await controller.deleteCategory('纪念日'), isTrue);
+
+      expect(
+        controller.categories,
+        EventStore.defaultCategories.where((name) => name != '纪念日'),
+      );
+      expect((await store.allEvents()).single.category, '其他');
+
+      await controller.undo();
+
+      expect(controller.categories, EventStore.defaultCategories);
+      expect((await store.allEvents()).single.category, '纪念日');
+      controller.dispose();
+    });
+
+    test('改名也会带着内置条目的改动记录一起改', () async {
+      final store = _FakeStore()
+        ..savedOverrides.add(
+          DayOverride(
+            origin: 'holiday:春节:2026-02-15',
+            title: '春节',
+            date: DateTime(2026, 2, 17),
+            category: '纪念日',
+            note: '',
+            reminderDays: -1,
+          ),
+        );
+      final controller = await _started(store);
+
+      await controller.renameCategory('纪念日', '家人');
+
+      expect(
+        (await store.allOverrides()).single.category,
+        '家人',
+        reason: '改过的内置条目也是用户的东西，改分类名不该漏掉它',
+      );
+      controller.dispose();
+    });
+
+    test('「其他」不给删：它是记录挪过去的目的地', () async {
+      final controller = await _started(_FakeStore());
+
+      expect(await controller.deleteCategory('其他'), isFalse);
+      expect(controller.categories, EventStore.defaultCategories);
+      controller.dispose();
+    });
+
+    test('删掉清单里最后一个「其他」也不影响兜底', () async {
+      final controller = await _started(_FakeStore());
+      await controller.addCategory('旅行');
+
+      expect(await controller.deleteCategory('旅行'), isTrue);
+
+      expect(
+        controller.categories,
+        contains(EventStore.fallbackCategory),
+        reason: '清单里没有「其他」的话，被挪过去的记录就没地方筛',
+      );
+      controller.dispose();
+    });
+
+    test('改名与删除都拒绝不存在的分类名', () async {
+      final controller = await _started(_FakeStore());
+
+      expect(await controller.renameCategory('不存在', '新名'), isFalse);
+      expect(await controller.deleteCategory('不存在'), isFalse);
+      expect(controller.categories, EventStore.defaultCategories);
+      controller.dispose();
+    });
   });
 
   test('设置会持久化，重启后仍然生效', () async {

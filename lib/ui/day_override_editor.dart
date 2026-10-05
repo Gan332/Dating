@@ -2,7 +2,6 @@ import 'package:flutter/services.dart';
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:material_ui/material_ui.dart';
 
-import '../models/countdown_event.dart';
 import '../models/day_override.dart';
 import 'event_editor.dart';
 
@@ -25,6 +24,8 @@ class DayOverrideEditor extends StatefulWidget {
     required this.date,
     required this.subtitle,
     required this.overridden,
+    this.categories,
+    this.savedCategory = '重要日',
   });
 
   /// 内置条目的稳定标识。
@@ -40,6 +41,13 @@ class DayOverrideEditor extends StatefulWidget {
 
   /// 是否已经改过。
   final bool overridden;
+
+  /// 分类选项，由调用方传入。留空时回落到内置清单。
+  final List<String>? categories;
+
+  /// 这条改动记录原本的分类。改动面板每次都从默认的「重要日」起手，
+  /// 所以只有已经改过的条目才需要把它带进来继续显示。
+  final String savedCategory;
 
   @override
   State<DayOverrideEditor> createState() => _DayOverrideEditorState();
@@ -61,7 +69,7 @@ class _DayOverrideEditorState extends State<DayOverrideEditor> {
     _titleController = TextEditingController(text: widget.title);
     _noteController = TextEditingController();
     _date = widget.date;
-    _category = '重要日';
+    _category = widget.savedCategory;
     _reminderDays = -1;
     _reminderHour = 9;
     _hidden = false;
@@ -162,7 +170,8 @@ class _DayOverrideEditorState extends State<DayOverrideEditor> {
                 spacing: 8,
                 runSpacing: 4,
                 children: [
-                  for (final category in kEventCategories)
+                  for (final category
+                      in categoryChoices(widget.categories, _category))
                     ChoiceChip(
                       label: Text(category),
                       selected: _category == category,

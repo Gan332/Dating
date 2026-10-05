@@ -72,6 +72,14 @@ class _FakeStore extends EventStore {
   @override
   Future<List<DayOverride>> allOverrides() async => List.of(savedOverrides);
 
+  // 分类清单同样要在纯内存环境里给出结果：不覆盖的话会走到基类实现，
+  // 那里要真的开数据库，于是报 databaseFactory not initialized。
+  @override
+  Future<List<String>> allCategories() async => EventStore.defaultCategories;
+
+  @override
+  Future<void> replaceCategories(List<String> names) async {}
+
   @override
   Future<void> saveOverride(DayOverride override) async {
     savedOverrides

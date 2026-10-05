@@ -13,15 +13,44 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 记录存储的假实现：本页面只读，给一份固定列表即可。
 class _FakeStore extends EventStore {
-  _FakeStore(this.events);
+  _FakeStore(List<CountdownEvent> events, {List<String>? categories})
+      : events = List.of(events),
+        categories = categories ?? EventStore.defaultCategories;
 
+  /// 记录列表。构造时**必须拷贝**一份进来：分类增删改会原地替换
+  /// `events[index]`，若直接持有调用方给的那份列表，一个用例就会把全局夹具
+  /// 改掉，后面用同一份夹具的用例全被污染——表现是单跑通过、连着跑失败。
   final List<CountdownEvent> events;
+
+  /// 这个用例要用的分类清单；传 null 表示用内置的那几个。
+  List<String> categories;
 
   @override
   Future<List<CountdownEvent>> allEvents() async => List.of(events);
 
   @override
   Future<List<DayOverride>> allOverrides() async => const [];
+
+  @override
+  Future<List<String>> allCategories() async => categories;
+
+  // 分类增删改要真的落库：这些用例要验证面板走完之后控制器里确实多了一项，
+  // 只读不写的话面板看起来能点，实际上什么都没发生。
+  @override
+  Future<void> replaceCategories(List<String> names) async {
+    categories = List.of(names);
+  }
+
+  // 删分类时控制器会把挂在它上面的记录挪到「其他」，这条路径也必须留在内存里，
+  // 否则会走到基类实现去真的开数据库。
+  @override
+  Future<void> updateEventsCategory(List<String> ids, String category) async {
+    for (final (index, event) in [...events.indexed]) {
+      if (ids.contains(event.id)) {
+        events[index] = event.copyWith(category: category);
+      }
+    }
+  }
 }
 
 /// 提醒的假实现：不做任何事，免得测试碰通知插件通道。
@@ -123,9 +152,12 @@ Widget _app(AppController controller, {VoidCallback? onAdd}) => M3EMaterialApp(
     );
 
 /// 起一个只喂内存数据的控制器。[timeout] 调小，免得插件通道无响应把用例拖死。
-Future<AppController> _start(List<CountdownEvent> events) async {
+Future<AppController> _start(
+  List<CountdownEvent> events, {
+  List<String>? categories,
+}) async {
   final controller = AppController(
-    store: _FakeStore(events),
+    store: _FakeStore(events, categories: categories),
     reminders: _FakeReminders(),
     holidays: _FakeHolidays(),
     timeout: const Duration(milliseconds: 200),
@@ -174,6 +206,27 @@ void _expectVisible(String title) =>
 
 void _expectHidden(String title) =>
     expect(find.text(title), findsNothing, reason: '不该再看到「$title」');
+
+/// 分类管理面板里某一行的某个按钮。
+///
+/// 每行有「改名」和「删除」两个 IconButton，只按行定位会命中两个；用
+/// `find.byTooltip` 又会找到包在外面的 Tooltip 而不是按钮本身。直接按 IconButton
+/// 的 tooltip 属性筛，拿到的是既能 tap 又能读 onPressed 的那一个。
+Finder _categoryButton(String category, String tooltip) => find.descendant(
+      of: find.widgetWithText(ListTile, category),
+      matching: find.byWidgetPredicate(
+        (widget) => widget is IconButton && widget.tooltip == tooltip,
+        description: 'IconButton($tooltip)',
+      ),
+    );
+
+/// 分类名同时出现在筛选条和卡片副标题上，断言筛选条时必须按类型定位，
+/// 否则会数出两个一模一样的 Text。
+void _expectChipVisible(String category) => expect(
+      _chip(category),
+      findsOneWidget,
+      reason: '筛选条上应有「$category」',
+    );
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -299,6 +352,104 @@ void main() {
       _expectVisible(_wedding);
       _expectHidden(_goal);
       _expectHidden(_birthday);
+    });
+  });
+
+  group('重要日页：分类清单', () {
+    testWidgets('筛选条列的是控制器里的分类，不是写死的那几个', (tester) async {
+      final controller = await _start(
+        _fixture,
+        categories: ['纪念日', '旅行'],
+      );
+      await _pump(tester, controller);
+
+      _expectChipVisible('纪念日');
+      _expectChipVisible('旅行');
+      // 用户删掉的分类不该还留在筛选条上。
+      expect(_chip('目标'), findsNothing);
+    });
+
+    testWidgets('分类管理入口可见', (tester) async {
+      final controller = await _start(_fixture);
+      await _pump(tester, controller);
+
+      expect(find.widgetWithText(ActionChip, '管理分类'), findsOneWidget);
+    });
+
+    testWidgets('打开管理面板后能新增分类，控制器里真的多了一项', (tester) async {
+      final controller = await _start(_fixture);
+      await _pump(tester, controller);
+
+      await tester.tap(find.widgetWithText(ActionChip, '管理分类'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.widgetWithText(TextField, '新增分类'),
+        '旅行',
+      );
+      await tester.tap(find.widgetWithText(M3EButton, '添加'));
+      await tester.pumpAndSettle();
+
+      expect(controller.categories, contains('旅行'));
+    });
+
+    testWidgets('重名的分类在面板里就被挡下，不会有第二个「生日」', (
+      tester,
+    ) async {
+      final controller = await _start(_fixture);
+      await _pump(tester, controller);
+
+      await tester.tap(find.widgetWithText(ActionChip, '管理分类'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.widgetWithText(TextField, '新增分类'),
+        '生日',
+      );
+      await tester.tap(find.widgetWithText(M3EButton, '添加'));
+      await tester.pumpAndSettle();
+
+      // 面板还开着（没被 pop 掉），并且给了一句说明。
+      expect(find.widgetWithText(TextField, '新增分类'), findsOneWidget);
+      expect(find.text('已经有「生日」这个分类了'), findsOneWidget);
+      expect(controller.categories.where((name) => name == '生日'), hasLength(1));
+    });
+
+    testWidgets('删除分类要二次确认，确认后记录挪到「其他」', (tester) async {
+      final controller = await _start(_fixture);
+      await _pump(tester, controller);
+
+      await tester.tap(find.widgetWithText(ActionChip, '管理分类'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(_categoryButton('目标', '删除分类'));
+      await tester.pumpAndSettle();
+
+      // 确认框先问一句，说明记录不会丢。
+      expect(find.text('删除这个分类？'), findsOneWidget);
+      expect(find.textContaining('挪到'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(FilledButton, '删除'));
+      await tester.pumpAndSettle();
+
+      expect(controller.categories, isNot(contains('目标')));
+    });
+
+    testWidgets('「其他」的删除按钮是禁用的：它是记录挪过去的目的地', (
+      tester,
+    ) async {
+      final controller = await _start(_fixture);
+      await _pump(tester, controller);
+
+      await tester.tap(find.widgetWithText(ActionChip, '管理分类'));
+      await tester.pumpAndSettle();
+
+      final button = tester.widget<IconButton>(
+        _categoryButton('其他', '这个分类不能删'),
+      );
+
+      expect(button.onPressed, isNull);
+      expect(await controller.deleteCategory('其他'), isFalse);
     });
   });
 

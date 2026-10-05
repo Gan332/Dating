@@ -20,11 +20,16 @@ class _UndoSnapshot {
     required this.events,
     required this.overrides,
     required this.settings,
+    required this.categories,
   });
 
   final List<CountdownEvent> events;
   final List<DayOverride> overrides;
   final AppSettings settings;
+
+  /// 分类清单也要进快照：删掉一个分类会同时改动清单与挂在它上面的记录，
+  /// 少存这一项的话撤销只能把记录挪回去，清单却回不来。
+  final List<String> categories;
 }
 
 class AppController extends ChangeNotifier {
@@ -59,6 +64,7 @@ class AppController extends ChangeNotifier {
 
   List<CountdownEvent> _events = const [];
   final Map<String, DayOverride> _overrides = {};
+  List<String> _categories = const [];
   AppSettings _settings = const AppSettings();
   bool _ready = false;
   bool _loading = false;
@@ -70,6 +76,12 @@ class AppController extends ChangeNotifier {
   DateTime? _holidayFetchedAt;
 
   List<CountdownEvent> get events => _events;
+
+  /// 用户可用的分类清单，顺序即界面上的展示顺序。
+  ///
+  /// 不落库也不通知，可以在 build() 里直接调用。加载完成前为空，界面读到空清单时
+  /// 应回落到内置清单（见 `categoriesOf`），免得筛选条在启动那一瞬是空的。
+  List<String> get categories => List.unmodifiable(_categories);
 
   bool get ready => _ready;
   bool get loading => _loading;
@@ -250,6 +262,9 @@ class AppController extends ChangeNotifier {
           reminderDays: override.reminderDays,
           // 时刻也要带过去，否则改了内置条目的提醒时刻不会生效。
           reminderHour: override.reminderHour,
+          // createdAt 恒为 0：内置条目不是用户建的，没有「什么时候记下这一条」
+          // 可言。存储层只在 save() 上补时间戳，临时构造的事件走不到那条路径。
+          coverPath: override.coverPath,
         ),
       );
     }
@@ -288,6 +303,7 @@ class AppController extends ChangeNotifier {
     _overrides
       ..clear()
       ..addEntries(overrides.map((item) => MapEntry(item.origin, item)));
+    _categories = await _store.allCategories();
   }
 
   Future<void> _warmUpReminders() async {
@@ -385,6 +401,7 @@ class AppController extends ChangeNotifier {
       events: List.of(_events),
       overrides: _overrides.values.toList(growable: false),
       settings: _settings,
+      categories: List.of(_categories),
     );
     _undoLabel = label;
   }
@@ -395,13 +412,18 @@ class AppController extends ChangeNotifier {
     if (snapshot == null) return;
     _undoSnapshot = null;
     await _withTimeout(
-      _store.replaceAll(snapshot.events, snapshot.overrides),
+      _store.replaceAll(
+        snapshot.events,
+        snapshot.overrides,
+        categories: snapshot.categories,
+      ),
       '撤销改动',
     );
     _events = List.of(snapshot.events);
     _overrides
       ..clear()
       ..addEntries(snapshot.overrides.map((item) => MapEntry(item.origin, item)));
+    _categories = List.of(snapshot.categories);
     _settings = snapshot.settings;
     await _settingsStore.save(_settings);
     notifyListeners();
@@ -452,6 +474,117 @@ class AppController extends ChangeNotifier {
       '批量修改提醒',
     );
     await _refresh();
+  }
+
+  // ------------------------------------------------------------ 分类的改动
+
+  /// 新增一个分类，名称重复时返回 false。
+  ///
+  /// 返回 false 而不是抛错：界面上「重名」只是提示一下，不该冒泡成一条
+  /// 「新增分类失败」的 SnackBar。空名与超长名在这里被规范化掉，
+  /// 导入备份时才会严词拒绝（那是另一条路径，语义不同）。
+  Future<bool> addCategory(String name) async {
+    final category = _normalizeCategory(name);
+    if (category == null) return false;
+    if (_categories.contains(category)) return false;
+    await _applyCategories(
+      [..._categories, category],
+      '新增分类「$category」',
+    );
+    return true;
+  }
+
+  /// 改名。旧名不存在、或新名已被占用时返回 false。
+  ///
+  /// 挂在旧名上的记录与改动记录一起跟着改，否则改完名那批记录就落在一个
+  /// 清单里已经不存在的分类上，界面上再也筛不出来。
+  Future<bool> renameCategory(String from, String to) async {
+    final target = _normalizeCategory(to);
+    if (target == null || !_categories.contains(from)) return false;
+    if (from == target) return false;
+    if (_categories.contains(target)) return false;
+    final next = [
+      for (final name in _categories) if (name == from) target else name,
+    ];
+    await _applyCategories(
+      next,
+      '把「$from」改名为「$target」',
+      moveFrom: from,
+      moveTo: target,
+    );
+    return true;
+  }
+
+  /// 删除一个分类。挂在它上面的记录与改动记录改到「其他」。
+  ///
+  /// 「其他」不在清单里时补进来：清单里没有它，那些被挪过去的记录就成了一个
+  /// 选不出来的分类，用户既看不见也筛不到。
+  Future<bool> deleteCategory(String name) async {
+    if (!_categories.contains(name)) return false;
+    if (name == EventStore.fallbackCategory) return false;
+    final next = _categories.where((item) => item != name).toList();
+    if (!next.contains(EventStore.fallbackCategory)) {
+      next.add(EventStore.fallbackCategory);
+    }
+    await _applyCategories(
+      next,
+      '删除分类「$name」',
+      moveFrom: name,
+      moveTo: EventStore.fallbackCategory,
+    );
+    return true;
+  }
+
+  /// 落一次分类改动：先记快照，再改记录归属与清单。
+  ///
+  /// [moveFrom] 与 [moveTo] 让记录跟着分类一起搬家；两者只传一个时列表里本就没有
+  /// 引用（纯新增分类），不该白跑一遍 UPDATE。
+  Future<void> _applyCategories(
+    List<String> next,
+    String label, {
+    String? moveFrom,
+    String? moveTo,
+  }) async {
+    _remember(label);
+    final from = moveFrom;
+    final to = moveTo;
+    if (from != null && to != null) {
+      final moving = [
+        for (final event in _events)
+          if (event.category == from) event.id,
+      ];
+      if (moving.isNotEmpty) {
+        await _withTimeout(
+          _store.updateEventsCategory(moving, to),
+          '批量修改分类',
+        );
+      }
+      final changedOverrides = [
+        for (final override in _overrides.values)
+          if (override.category == from) override,
+      ];
+      if (changedOverrides.isNotEmpty) {
+        await _withTimeout(
+          _store.saveOverrides(
+            changedOverrides.map((override) => override.copyWith(category: to)),
+          ),
+          '修改内置条目改动',
+        );
+      }
+    }
+    // 分类只在提醒文案之外生效，但记录归属变了仍要重建一次：改动记录的提醒里
+    // 带着分类名，漏了这一步会让通知文案停留在旧分类上。
+    await _withTimeout(_store.replaceCategories(next), '保存分类清单');
+    await _refresh();
+  }
+
+  /// 分类名的规范化：去掉首尾空白，空串与超长名返回 null。
+  static String? _normalizeCategory(String raw) {
+    final name = raw.trim();
+    if (name.isEmpty || name.length > EventStore.maxCategoryLength) {
+      return null;
+    }
+    return name;
   }
 
   // ------------------------------------------------------ 内置条目的改动
@@ -576,6 +709,7 @@ class AppController extends ChangeNotifier {
     _overrides
       ..clear()
       ..addEntries(overrides.map((item) => MapEntry(item.origin, item)));
+    _categories = await _store.allCategories();
     notifyListeners();
     await _rescheduleReminders();
   }

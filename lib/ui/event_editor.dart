@@ -32,10 +32,30 @@ const int kCustomLeadSentinel = -999;
 bool _isPresetLead(int days) =>
     kReminderLeadOptions.any((option) => option.days == days);
 
+/// 编辑器要用的分类清单。
+///
+/// 正在编辑的记录可能带着一个已经不在清单里的分类名（用户删掉了那个分类，
+/// 记录本身还在）。这时把原名补回清单，用户改个名字的功夫里分类不该被顺手换掉。
+/// 清单为空（启动那一瞬，或测试里没给）则回落内置清单。
+List<String> categoryChoices(List<String>? given, String? current) {
+  final base = (given == null || given.isEmpty) ? kEventCategories : given;
+  if (current != null && current.isNotEmpty && !base.contains(current)) {
+    return [...base, current];
+  }
+  return base;
+}
+
 class EventEditor extends StatefulWidget {
-  const EventEditor({super.key, this.event});
+  const EventEditor({super.key, this.event, this.categories});
 
   final CountdownEvent? event;
+
+  /// 分类选项，由调用方传入（界面层应当传 `AppController.categories`）。
+  ///
+  /// 刻意不把 AppController 塞进这个 Widget：编辑器只负责收集表单值，
+  /// 分类清单与其他设置一样是外部依赖，构造注入能让它在测试里脱离控制器
+  /// 单独跑。留空时回落到 [kEventCategories]。
+  final List<String>? categories;
 
   @override
   State<EventEditor> createState() => _EventEditorState();
@@ -61,7 +81,9 @@ class _EventEditorState extends State<EventEditor> {
     _noteController = TextEditingController(text: event?.note ?? '');
     _date = event?.date ?? DateTime.now();
     _recurrence = event?.recurrence ?? EventRecurrence.once;
-    _category = event?.category ?? '纪念日';
+    // 新建时默认落在清单的第一个分类；编辑时保留记录原本的分类。
+    final choices = categoryChoices(widget.categories, event?.category);
+    _category = event?.category ?? choices.first;
     _reminderDays = event?.reminderDays ?? -1;
     _reminderHour = event?.reminderHour ?? 9;
     _leapMonth = (event?.lunarMonth ?? 0) < 0;
@@ -207,7 +229,8 @@ class _EventEditorState extends State<EventEditor> {
                   spacing: 8,
                   runSpacing: 4,
                   children: [
-                    for (final category in kEventCategories)
+                    for (final category
+                        in categoryChoices(widget.categories, widget.event?.category))
                       ChoiceChip(
                         label: Text(category),
                         selected: _category == category,
@@ -371,6 +394,10 @@ class _EventEditorState extends State<EventEditor> {
       lunarDay: _recurrence == EventRecurrence.lunarYearly ? lunar.getDay() : null,
       reminderDays: _reminderDays,
       reminderHour: _reminderHour,
+      // 编辑已有记录时把创建时间原样带过去：0 意味着「未知」，落库时会补成保存那一刻，
+      // 那会让一条 2019 年的记录看起来像今天才建的，按创建时间排序时直接跳到最前。
+      createdAt: existing?.createdAt ?? 0,
+      coverPath: existing?.coverPath,
     );
     Navigator.pop(context, event);
   }

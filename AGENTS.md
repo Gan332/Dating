@@ -28,8 +28,9 @@ lib/app_controller.dart  ChangeNotifier，唯一的写入口；每个动作 _rem
 关键数据流约定：
 
 - **启动**：`load()` 里 `_withTimeout(_loadCore(), '读取本地数据')` 之后 `unawaited` 三件后台事（提醒预热、读节假日缓存、静默刷新），`finally` 无条件把 `_ready = true`。`_ready` 为 false 时 `main.dart` 显示 `_StartupView`，出错时 `AppShell` 顶部显示 `_StartupErrorBanner`。
-- **写操作**：`saveEvent` / `deleteEvent(s)` / `updateEventsCategory` / `updateEventsReminder` / `saveOverride` / `restoreOverride(s)` / `updateSettings` / `setRemindersEnabled`。每个都先 `_remember(label)`，再落库，再 `_refresh()` 重读并重建提醒。
-- **撤销**：`_UndoSnapshot` 存 events + overrides + settings，`undo()` 用 `EventStore.replaceAll` 全量回滚。
+- **写操作**：`saveEvent` / `deleteEvent(s)` / `updateEventsCategory` / `updateEventsReminder` / `saveOverride` / `restoreOverride(s)` / `addCategory` / `renameCategory` / `deleteCategory` / `updateSettings` / `setRemindersEnabled`。每个都先 `_remember(label)`，再落库，再 `_refresh()` 重读并重建提醒。
+- **分类是数据不是外观**：清单存在 `categories` 表（`name` 主键 + `sortOrder`），内置起点是 `EventStore.defaultCategories`（= `kEventCategories`）。界面读 `AppController.categories`，加载完成前为空时用 `categoriesOf(controller)` 兜底。改名/删除会同时搬 `events` 与 `day_overrides` 的 category，**必须经 `_applyCategories` 才能一起撤销**；`EventStore.fallbackCategory`（`其他`）是删除时的落点，界面上不给删。
+- **撤销**：`_UndoSnapshot` 存 events + overrides + settings + categories，`undo()` 用 `EventStore.replaceAll` 全量回滚。
 - **内置条目不落库**：官方节假日与传统节日由 `HolidayCatalog` / `lunar` 算出；用户改动以 `DayOverride` 行存储，靠稳定标识 `origin` 关联（`CalendarEngine.holidayOrigin(name, start)` → `holiday:春节:2026-02-15`；`festivalOrigin` → `festival:2026-02-17:名称`）。隐藏某条即 `hidden == 1`。
 - **日期计算**：`CalendarEngine.daysBetween` → `RustDateCore.daysBetween`（Android 上走 `libdaymark_core.so`，否则走 `DateTime.utc` 差值）。禁止直接相减 `DateTime`。
 
@@ -43,7 +44,7 @@ lib/app_controller.dart  ChangeNotifier，唯一的写入口；每个动作 _rem
 | `lib/data/backup_file_gateway.dart` | `BackupFileGateway` 抽象 + `PluginBackupFileGateway`（share_plus 导出 / file_picker 导入）、`backupFilename`、`BackupFileException` |
 | `lib/core/rust_date_core.dart` | FFI 封装（`daymark_days_between` typedef + 纯 Dart 回退） |
 | `lib/core/year_progress.dart` | 年度进度（`dayOfYear` / `totalDays` / `progress`） |
-| `lib/data/event_store.dart` | SQLite 全部读写 + 备份载荷（`_schemaVersion = 3`，备份 `version = 2`，兼容读 v1；`EventStore({String? databasePath})` 供单测注入临时库） |
+| `lib/data/event_store.dart` | SQLite 全部读写 + 备份载荷（`_schemaVersion = 4`，备份 `backupVersion = 3`，兼容读 v1/v2/v3；`EventStore({String? databasePath})` 供单测注入临时库） |
 | `lib/data/settings_store.dart` | 设置 JSON 持久化 + 旧版 `remindersEnabled` 迁移 |
 | `lib/data/holiday_catalog.dart` | 内置 2026 安排、`publishedYear`/`source`/`sourceDate`、`applyOnline`/`clearOnline` 覆盖层 |
 | `lib/data/holiday_repository.dart` | `HttpClient` 拉取（raw → jsDelivr → timor 兜底）、SharedPreferences 缓存、`HolidayUpdateException` |
@@ -96,11 +97,13 @@ flutter build appbundle --release --target-platform android-arm,android-arm64
 - **错误处理分层**：数据不合法 → `throw const FormatException('中文说明')`；后台/可选路径 → `catch (error, stack) { debugPrint('…：$error\n$stack'); }`；需要 UI 感知 → `rethrow` 给 `_runMutation` 弹 SnackBar。
 - **模型契约**：`CountdownEvent.toMap/fromMap`（`date` 存 `yyyy-MM-dd`）、`DayOverride.toMap/fromMap`（`date` 存 ISO8601，`hidden` 存 0/1）。改字段要同步 `event_store.dart` 的建表语句、`_schemaVersion` 与 `onUpgrade`，并考虑旧备份缺字段。
 - **提醒时刻**：`CountdownEvent` / `DayOverride` 都有 `int reminderHour`（默认 9，0..23）。`fromMap` 必须写成 `((map['reminderHour'] as num?)?.toInt() ?? 9).clamp(0, 23)` —— 手改过的备份不能把 30 点这种非法值带进数据库。改内置条目提醒时，`AppController._reminderCandidates` 要把 `reminderHour` 一起搬进临时 `CountdownEvent`，否则时刻不生效。编辑器用 `event_editor.dart` 里的 `kReminderLeadOptions` 与 `formatHour`。
-- **备份格式**：`{format: 'daymark.backup', version: 2, events: [...], overrides: [...], settings: {...}}`。`importPayload` 通过 `_readableBackupVersions = {1, 2}` 收口：继续接受 v1（缺字段回落到模型默认值），拒绝更高版本（字段语义未知，按老结构写会损坏数据）。全部校验必须保留：事件数 ≤ 1000、改动数 ≤ 2000、标题非空且 ≤ 80 字、id 不重复，且整个替换在 `database.transaction` 内。设置由 `AppController.exportJson` 补进载荷。
+- **备份格式**：`{format: 'daymark.backup', version: 3, events: [...], overrides: [...], categories: [...], settings: {...}}`。`importPayload` 通过 `_readableBackupVersions = {1, 2, 3}` 收口：继续接受 v1/v2（缺字段回落到模型默认值；`categories` 缺失时由 `readCategoriesFromBackup` 从记录里用到的分类名 + 内置清单推导），拒绝更高版本（字段语义未知，按老结构写会损坏数据）。全部校验必须保留：事件数 ≤ 1000、改动数 ≤ 2000、分类数 ≤ 50、分类名非空且 ≤ 20 字且不重复、标题非空且 ≤ 80 字、id 不重复，且整个替换在 `database.transaction` 内（校验放在开事务之前，被拒时三张表都不许动过）。设置由 `AppController.exportJson` 补进载荷。
+- **排序与封面字段**：`createdAt` 是毫秒时间戳，`0` 表示「不知道什么时候建的」，按创建时间排序时排最后 —— 存储层 `EventStore.save` 见到 0 就补当前时刻，编辑器必须把 `existing.createdAt` 原样带过去。`coverPath` 只存文件名不存绝对路径（换机后沙箱路径会变）。
 - **日期**：`CountdownEvent.dateKey` / `HolidayCatalog._key` 生成 `yyyy-MM-dd`；比较一律走 `CalendarEngine.dateOnly` / `daysBetween`。
 - **里程碑文案**：`elapsedDays` 一律从事件最初的 `CountdownEvent.date` 起算，不是从今年重新计数。周年数公历重复按公历年、农历重复按**农历年**（`Lunar.getYear()` 之差；拿公历年差凑数会在腊月事件上错一整年）。`milestoneFor` 返回 `null` 或 `milestoneSummary` 返回空串时，界面整行隐藏，不要编数字出来。
 - **内置条目的唯一算法在 `AppController.builtInOccurrences`**：首页与搜索都调它，别在 Widget 里再写一遍假期与农历节日，否则两处口径迟早不一致。
 - **平台能力一律接口 + 构造注入**：`BackupFileGateway` 与 `ReminderScheduler` 同构。插件调用全部收口在 `PluginBackupFileGateway` 的两个静态方法里，插件签名对不上时只改那一个文件。导出返回 `false`、导入返回 `null` 都表示「用户取消」，不是错误。
+- **编辑器不吃控制器**：`EventEditor` / `DayOverrideEditor` 通过 `categories:` 参数拿分类清单（`app_shell.dart` 传 `categoriesOf(controller)`），不持有 `AppController`。`event_editor.dart` 的 `categoryChoices(given, current)` 负责兜底：清单为空回落内置清单，记录带一个已被删掉的分类名时把该名字补进清单 —— 改分类是用户的决定，编辑个名字的功夫不该顺手把分类也换了。
 - **提醒提前天数**：下拉里只有 0/1/7 是预设，其余算自定义。`kCustomLeadSentinel` 只是下拉项的占位值，**绝不能**存进数据库；合法范围 0–365。
 - **Rust FFI**：导出用 `#[no_mangle] pub extern "C"`，非法日期返回 `INVALID_DATE`（`i64::MIN`）。Dart 侧 `RustDateCore.daysBetween` 只在 `Platform.isAndroid` 加载 `libdaymark_core.so`，符号缺失静默回退；新增导出时两边的 `_Native*` / `_Dart*` typedef 一起加。
 - **Dart 语法坑**（已踩过）：条件表达式里不能用级联 `..`——`holiday_catalog.dart:110` 有注释说明，`makeupWorkdays` 改写成块函数体。
@@ -115,11 +118,11 @@ flutter build appbundle --release --target-platform android-arm,android-arm64
 
 | 文件 | 覆盖 |
 | --- | --- |
-| `test/app_controller_test.dart` | 启动成功/超时/抛错/重复 load、批量改动+撤销、恢复内置条目+撤销、设置持久化、备份含设置 |
+| `test/app_controller_test.dart` | 启动成功/超时/抛错/重复 load、批量改动+撤销、恢复内置条目+撤销、设置持久化、备份含设置、分类增删改+撤销（记录与改动记录一起搬家） |
 | `test/app_controller_filter_test.dart` | `searchResults` 关键词/分类/叠加过滤、结果不可修改；导入失败不覆盖撤销快照的回归 |
-| `test/event_store_test.dart` | 真实 SQLite（`sqflite_common_ffi`）：排序、全字段往返、精确删除/批量改、`replaceAll`、备份信封、多条拒绝路径、v1 兼容 |
+| `test/event_store_test.dart` | 真实 SQLite（`sqflite_common_ffi`）：排序、全字段往返、精确删除/批量改、`replaceAll`、备份信封、多条拒绝路径、v1 兼容、分类清单 CRUD、createdAt/coverPath 往返 |
 | `test/reminder_time_test.dart` | `reminderHour` 缺字段回落 9、null、越界夹取、浮点截断、`copyWith` 不变异性 |
-| `test/important_days_page_test.dart` | **widget 测试**：搜索/分类筛选/两者叠加/再点取消、两种空态的区分与文案、清除筛选 |
+| `test/important_days_page_test.dart` | **widget 测试**：搜索/分类筛选/两者叠加/再点取消、两种空态的区分与文案、清除筛选、分类管理面板（新增/重名挡下/删除二次确认/「其他」禁删） |
 | `test/holiday_data_test.dart` | 自建数据格式与公共接口（timor）格式解析、坏数据返回 null、覆盖/清除内置数据 |
 | `test/holiday_catalog_test.dart` | 2026 放假区间、补休日、未公布年份不推断、`latestYear` 不倒退（线上只剩更早年份时的回归守卫） |
 | `test/calendar_engine_test.dart` | `daysBetween` 方向与闰日、过去的一次性事件仍可见、2/29 在平年收敛到 2/28、农历新年下一次；`lunarFestivalsInRange` 窗口边界 `[from, from+days)`、去重、不可修改；`approachProgress` 的 null/0/1/半程/夹取/闰日/农历 |
@@ -127,7 +130,7 @@ flutter build appbundle --release --target-platform android-arm,android-arm64
 
 写新测试时照抄 `test/app_controller_test.dart` 里的三个假实现（它们是文件私有的，新文件需重新声明）：
 
-- `_FakeStore extends EventStore` —— `hangForever`（`await Completer().future` 模拟不返回）、`failOnRead`（抛 `StateError('数据库打不开')`）。
+- `_FakeStore extends EventStore` —— `hangForever`（`await Completer().future` 模拟不返回）、`failOnRead`（抛 `StateError('数据库打不开')`）。**新文件里的副本必须覆盖 `allCategories` 与 `replaceCategories`**，否则控制器 `_loadCore` / `_refresh` 会走到基类实现去真的开 `openDatabase`，报 `databaseFactory not initialized`。若副本会原地改 `events[index]`，构造时必须 `List.of(events)` 拷贝 —— 否则一个用例会改到共享夹具上，表现为单跑通过、连着跑失败。
 - `_FakeReminders extends ReminderService` 或 `implements ReminderScheduler` —— `hangForever`、`usable`、`initializeCalls`。
 - `_FakeHolidays extends HolidayRepository` —— `super(endpoints: const <String>[])`，`fetch` 抛 `HolidayUpdateException('测试环境离线')`。**测试绝不联网。**
 

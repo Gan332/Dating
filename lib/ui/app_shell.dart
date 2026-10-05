@@ -7,6 +7,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../app_controller.dart';
 import '../core/calendar_engine.dart';
+import '../data/event_store.dart';
 import '../data/holiday_catalog.dart';
 import '../models/app_settings.dart';
 import '../models/countdown_event.dart';
@@ -35,7 +36,10 @@ class _AppShellState extends State<AppShell> {
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => EventEditor(event: event),
+      builder: (_) => EventEditor(
+        event: event,
+        categories: categoriesOf(widget.controller),
+      ),
     );
     if (result == null) return;
     await _runMutation(
@@ -92,7 +96,10 @@ class _AppShellState extends State<AppShell> {
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => EventEditor(event: event),
+      builder: (_) => EventEditor(
+        event: event,
+        categories: categoriesOf(widget.controller),
+      ),
     );
     if (result == null) return;
     await _runMutation(
@@ -120,6 +127,10 @@ class _AppShellState extends State<AppShell> {
         date: item.date,
         subtitle: item.subtitle,
         overridden: item.overridden,
+        categories: categoriesOf(widget.controller),
+        // 已改过的条目要接着显示它原本的分类，而不是每次都退回「重要日」。
+        savedCategory: widget.controller.overrideFor(origin)?.category ??
+            '重要日',
       ),
     );
     if (result == null) return;
@@ -268,6 +279,16 @@ class _AppShellState extends State<AppShell> {
     );
   }
 }
+
+/// 分类筛选条与「统一改分类」要显示的清单。
+///
+/// 控制器加载完成前 categories 是空的，那一瞬间回落到内置清单，
+/// 免得筛选条先空一帧再突然冒出五个选项。
+List<String> categoriesOf(AppController controller) {
+  final loaded = controller.categories;
+  return loaded.isEmpty ? kEventCategories : loaded;
+}
+
 class HomePage extends StatefulWidget {
   const HomePage({
     super.key,
@@ -505,7 +526,10 @@ class _HomePageState extends State<HomePage> {
       _toast('批量改分类只对自己的记录生效');
       return;
     }
-    final category = await showCategoryPicker(context);
+    final category = await showCategoryPicker(
+      context,
+      categories: categoriesOf(widget.controller),
+    );
     if (category == null) return;
     await widget.onMutate(
       () => widget.controller.updateEventsCategory(ids, category),
@@ -1125,11 +1149,12 @@ class _ImportantDaysPageState extends State<ImportantDaysPage> {
               ),
               const SizedBox(height: 10),
               // 分类筛选：再点一次同一个分类即取消，_category 回到 null。
+              // 清单读的是控制器，用户新增的分类立刻就出现在这一排里。
               SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: Row(
                   children: [
-                    for (final category in kEventCategories)
+                        for (final category in categories)
                       Padding(
                         padding: const EdgeInsets.only(right: 8),
                         child: FilterChip(
@@ -1140,6 +1165,13 @@ class _ImportantDaysPageState extends State<ImportantDaysPage> {
                           ),
                         ),
                       ),
+                    // 分类管理入口放在筛选条末尾：它是低频操作，但用户一旦想改分类，
+                    // 找不到入口就只能删掉记录重来。
+                    ActionChip(
+                      avatar: const Icon(Icons.tune_rounded, size: 17),
+                      label: const Text('管理分类'),
+                      onPressed: _manageCategories,
+                    ),
                   ],
                 ),
               ),
@@ -1204,6 +1236,48 @@ class _ImportantDaysPageState extends State<ImportantDaysPage> {
       );
   }
 
+  /// 分类筛选条与「统一改分类」要显示的清单。
+  List<String> get categories => categoriesOf(widget.controller);
+
+  /// 打开分类管理面板。
+  Future<void> _manageCategories() async {
+    if (!mounted) return;
+    final command = await showCategoryManager(context, categories);
+    if (command == null || !mounted) return;
+    final controller = widget.controller;
+    final name = command.name!;
+
+    // 正被筛着的那个分类被删掉时顺手放开筛选：否则列表会莫名其妙空掉，
+    // 而用户刚才明明没有做任何筛选操作。
+    if (command.action == CategoryAction.delete && _category == name) {
+      setState(() => _category = null);
+    }
+
+    // 整条改动照常走 onMutate，拿到那条带「撤销」的提示条——删分类会同时改动
+    // 清单和挂在上面的记录，撤销是这里唯一能退回来的办法。
+    await widget.onMutate(
+      () async {
+        // 面板里已经挡过重名与空名，真被控制器拒掉说明数据层出了别的问题；
+        // 那时静悄悄地什么都不说，用户会以为改成功了。
+        final ok = switch (command.action) {
+          CategoryAction.add => await controller.addCategory(name),
+          CategoryAction.rename =>
+            await controller.renameCategory(name, command.to!),
+          CategoryAction.delete => await controller.deleteCategory(name),
+        };
+        if (!ok) {
+          throw StateError('这个分类名用不了，换一个试试');
+        }
+      },
+      switch (command.action) {
+        CategoryAction.add => '已新增分类「$name」',
+        CategoryAction.rename => '已把「$name」改名为「${command.to}」',
+        CategoryAction.delete =>
+          '已删除分类「$name」，里面的记录挪到「${EventStore.fallbackCategory}」',
+      },
+    );
+  }
+
   /// 是否正在按搜索词或分类筛选。用于区分「一条记录都没有」与
   /// 「有记录但被筛空了」两种空态。
   bool get filtering => _term.trim().isNotEmpty || _category != null;
@@ -1229,7 +1303,10 @@ class _ImportantDaysPageState extends State<ImportantDaysPage> {
   Future<void> _batchCategory() async {
     final ids = _selection.eventIdsOf(_visible);
     if (ids.isEmpty) return;
-    final category = await showCategoryPicker(context);
+    final category = await showCategoryPicker(
+      context,
+      categories: categoriesOf(widget.controller),
+    );
     if (category == null) return;
     await widget.onMutate(
       () => widget.controller.updateEventsCategory(ids, category),
@@ -2145,8 +2222,12 @@ class _SelectionBar extends StatelessWidget {
   }
 }
 
-/// 统一改分类。
-Future<String?> showCategoryPicker(BuildContext context) =>
+/// 统一改分类。清单由调用方给出——界面应当传控制器里的 [AppController.categories]，
+/// 这样用户新增的分类也能在这一排里被选到。
+Future<String?> showCategoryPicker(
+  BuildContext context, {
+  List<String>? categories,
+}) =>
     showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
@@ -2163,7 +2244,7 @@ Future<String?> showCategoryPicker(BuildContext context) =>
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  for (final category in kEventCategories)
+                  for (final category in categories ?? kEventCategories)
                     ActionChip(
                       label: Text(category),
                       onPressed: () => Navigator.pop(context, category),
@@ -2175,6 +2256,223 @@ Future<String?> showCategoryPicker(BuildContext context) =>
         ),
       ),
     );
+
+/// 分类管理面板里返回的一次操作。
+enum CategoryAction { add, rename, delete }
+
+/// 一次分类改动。[name] 是被改动的那个分类名；[to] 只有改名时才有值。
+class CategoryCommand {
+  const CategoryCommand(this.action, this.name, [this.to]);
+
+  final CategoryAction action;
+  final String? name;
+  final String? to;
+}
+
+/// 分类管理面板：增、改名、删除。返回 null 表示用户直接关掉了。
+///
+/// 删除要二次确认：它会把该分类下的记录挪到「其他」，是会影响已有数据的操作。
+/// 「其他」本身不给删——它是记录挪过去的目的地，删掉会让那些记录落进一个
+/// 界面上再也选不出来的分类。
+Future<CategoryCommand?> showCategoryManager(
+  BuildContext context,
+  List<String> categories,
+) =>
+    showModalBottomSheet<CategoryCommand>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (context) => _CategoryManagerSheet(categories: categories),
+    );
+
+class _CategoryManagerSheet extends StatefulWidget {
+  const _CategoryManagerSheet({required this.categories});
+
+  final List<String> categories;
+
+  @override
+  State<_CategoryManagerSheet> createState() => _CategoryManagerSheetState();
+}
+
+class _CategoryManagerSheetState extends State<_CategoryManagerSheet> {
+  late final List<String> _names = List.of(widget.categories);
+  final TextEditingController _input = TextEditingController();
+
+  /// 正在改名的分类；为空表示当前是「新增」模式。
+  String? _editing;
+
+  @override
+  void dispose() {
+    _input.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final editing = _editing;
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          20,
+          0,
+          20,
+          24 + MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('管理分类',
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 2),
+            Text(
+              editing == null
+                  ? '改分类名时，里面的记录会跟着一起改'
+                  : '正在把「$editing」改名',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: colors.onSurfaceVariant,
+                  ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _input,
+              autofocus: true,
+              maxLength: EventStore.maxCategoryLength,
+              decoration: InputDecoration(
+                labelText: editing == null ? '新增分类' : '新的分类名',
+                prefixIcon: const Icon(Icons.label_outline_rounded),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
+              ),
+              onSubmitted: (_) => _submit(),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                if (editing != null)
+                  TextButton(
+                    onPressed: () => setState(() {
+                      _editing = null;
+                      _input.clear();
+                    }),
+                    child: const Text('取消改名'),
+                  ),
+                const Spacer(),
+                M3EButton(
+                  style: M3EButtonStyle.filled,
+                  onPressed: _submit,
+                  child: Text(editing == null ? '添加' : '改名'),
+                ),
+              ],
+            ),
+            const Divider(height: 24),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final name in _names)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      title: Text(name),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            tooltip: '改名',
+                            onPressed: () => setState(() {
+                              _editing = name;
+                              _input.text = name;
+                              _input.selection = TextSelection(
+                                baseOffset: 0,
+                                extentOffset: name.length,
+                              );
+                            }),
+                            icon: const Icon(Icons.edit_outlined),
+                          ),
+                          IconButton(
+                            tooltip: name == EventStore.fallbackCategory
+                                ? '这个分类不能删'
+                                : '删除分类',
+                            // 「其他」是记录挪过去的目的地，给不给删都会让数据
+                            // 落进一个选不出来的分类，所以直接禁掉。
+                            onPressed: name == EventStore.fallbackCategory
+                                ? null
+                                : () => _confirmDelete(name),
+                            icon: const Icon(Icons.delete_outline_rounded),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _submit() {
+    final name = _input.text.trim();
+    if (name.isEmpty) return;
+    final editing = _editing;
+    // 重名与空名在这里就挡掉，不让用户白等一次落库失败。
+    if (editing == null) {
+      if (_names.contains(name)) {
+        _hint('已经有「$name」这个分类了');
+        return;
+      }
+      Navigator.pop(
+        context,
+        CategoryCommand(CategoryAction.add, name),
+      );
+      return;
+    }
+    if (name == editing) return;
+    if (_names.contains(name)) {
+      _hint('已经有「$name」这个分类了');
+      return;
+    }
+    Navigator.pop(
+      context,
+      CategoryCommand(CategoryAction.rename, editing, name),
+    );
+  }
+
+  Future<void> _confirmDelete(String name) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除这个分类？'),
+        content: Text('「$name」里的记录会挪到「${EventStore.fallbackCategory}」，记录本身不会丢。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    Navigator.pop(
+      context,
+      CategoryCommand(CategoryAction.delete, name),
+    );
+  }
+
+  void _hint(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+}
 
 /// 统一改提醒。
 ///

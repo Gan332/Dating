@@ -295,6 +295,140 @@ void main() {
     });
   });
 
+  group('分类清单', () {
+    test('新建库时按内置分类建好表', () async {
+      expect(
+        await store.allCategories(),
+        ['纪念日', '生日', '目标', '重要日', '其他'],
+        reason: '筛选条一上来就得有东西可显示，空清单会让分类筛选完全没法用',
+      );
+    });
+
+    test('替换后按给定顺序读回', () async {
+      await store.replaceCategories(['目标', '纪念日', '自定义']);
+
+      expect(await store.allCategories(), ['目标', '纪念日', '自定义']);
+    });
+
+    test('替换是全量替换：不在新清单里的名字会消失', () async {
+      await store.replaceCategories(['自定义']);
+
+      expect(await store.allCategories(), ['自定义']);
+    });
+
+    test('空清单不写入，保留本机原有的', () async {
+      await store.replaceCategories(['自定义']);
+      await store.replaceCategories(const []);
+
+      expect(
+        await store.allCategories(),
+        ['自定义'],
+        reason: '空清单会让编辑器一个分类都选不出来，宁可什么都不改',
+      );
+    });
+
+    test('replaceAll 不带分类时不动本机清单', () async {
+      await store.replaceCategories(['自定义']);
+
+      await store.replaceAll(
+        [_event('new', date: '2026-08-08')],
+        const [],
+      );
+
+      expect(await store.allCategories(), ['自定义']);
+    });
+
+    test('replaceAll 带上分类时一并回滚', () async {
+      await store.replaceCategories(['自定义']);
+      await store.replaceCategories(['别的']);
+
+      await store.replaceAll(
+        [_event('new', date: '2026-08-08')],
+        const [],
+        categories: ['自定义'],
+      );
+
+      expect(await store.allCategories(), ['自定义']);
+    });
+  });
+
+  group('排序与封面字段', () {
+    test('新记录落库时补上创建时间', () async {
+      final before = DateTime.now().millisecondsSinceEpoch;
+      await store.save(_eventAt('a', date: '2026-03-01'));
+
+      final stored = (await store.allEvents()).single;
+
+      expect(stored.createdAt, greaterThanOrEqualTo(before));
+      expect(stored.coverPath, isNull);
+    });
+
+    test('再次保存不会把已有的创建时间冲掉', () async {
+      await store.save(_eventAt('a', date: '2026-03-01', createdAt: 1735689600000));
+
+      await store.save(
+        _eventAt('a', date: '2026-03-02', title: '改了日期', createdAt: 1735689600000),
+      );
+
+      final stored = (await store.allEvents()).single;
+      expect(stored.createdAt, 1735689600000);
+      expect(stored.title, '改了日期');
+    });
+
+    test('createdAt 为 0 的记录落库后拿到当前时刻', () async {
+      final before = DateTime.now().millisecondsSinceEpoch;
+      await store.save(_event('a', date: '2026-03-01'));
+
+      expect((await store.allEvents()).single.createdAt, greaterThanOrEqualTo(before));
+    });
+
+    test('封面文件名能原样往返', () async {
+      await store.save(
+        _event('a', date: '2026-03-01').copyWith(coverPath: 'cover-a.jpg'),
+      );
+      await store.saveOverride(
+        _override('holiday:元旦:2026-01-01')
+            .copyWith(coverPath: 'cover-b.jpg'),
+      );
+
+      expect((await store.allEvents()).single.coverPath, 'cover-a.jpg');
+      expect((await store.allOverrides()).single.coverPath, 'cover-b.jpg');
+    });
+
+    test('空串封面按「没有封面」处理', () {
+      final event = CountdownEvent.fromMap({
+        'id': 'a',
+        'title': '标题',
+        'date': '2026-03-01',
+        'coverPath': '   ',
+      });
+
+      expect(event.coverPath, isNull);
+    });
+
+    test('负的创建时间夹到 0，不当成 1969 年', () {
+      final event = CountdownEvent.fromMap({
+        'id': 'a',
+        'title': '标题',
+        'date': '2026-03-01',
+        'createdAt': -5,
+      });
+
+      expect(event.createdAt, 0);
+    });
+
+    test('缺少 createdAt 的老数据回落到 0', () {
+      final event = CountdownEvent.fromMap({
+        'id': 'a',
+        'title': '标题',
+        'date': '2026-03-01',
+      });
+
+      expect(event.createdAt, 0);
+      expect(event.coverPath, isNull);
+    });
+  });
+
   group('备份导出与导入', () {
     test('导出带正确的信封头', () async {
       await store.save(_event('a', date: '2026-03-01', reminderHour: 20));
@@ -303,11 +437,16 @@ void main() {
       final payload = await store.exportPayload();
 
       expect(payload['format'], 'daymark.backup');
-      expect(payload['version'], 2);
+      expect(payload['version'], 3);
       final events = payload['events']! as List<dynamic>;
       expect(events, hasLength(1));
       expect((events.single! as Map<String, Object?>)['reminderHour'], 20);
       expect(payload['overrides'], hasLength(1));
+      expect(
+        payload['categories'],
+        ['纪念日', '生日', '目标', '重要日', '其他'],
+        reason: '分类清单必须跟着记录一起走，否则换机后筛选条上只有内置的几个',
+      );
     });
 
     test('导出的内容能原样导入到另一个库', () async {
@@ -333,6 +472,10 @@ void main() {
         (await target.allOverrides()).map((o) => o.origin).toList(),
         ['holiday:春节:2026-02-15'],
       );
+      expect(
+        await target.allCategories(),
+        ['纪念日', '生日', '目标', '重要日', '其他'],
+      );
     });
 
     test('导入是全量替换，本地多出来的记录会被清掉', () async {
@@ -357,6 +500,11 @@ void main() {
       );
 
       expect(count, 2);
+      expect(
+        await store.allCategories(),
+        ['纪念日', '生日', '目标', '重要日', '其他'],
+        reason: '老备份没有分类清单，但记录里的分类名必须出现在筛选条上',
+      );
       final events = {
         for (final event in await store.allEvents()) event.id: event,
       };
@@ -446,17 +594,67 @@ void main() {
       await expectRejected(_backup(overrides: '不是数组'));
     });
 
+    test('分类清单不是数组', () async {
+      await expectRejected(_backup(categories: '不是数组'));
+    });
+
+    test('分类超过 50 个', () async {
+      await expectRejected(_backup(categories: _manyCategories(51)));
+    });
+
+    test('分类名是空串或只有空白', () async {
+      await expectRejected(_backup(categories: ['纪念日', '']));
+      await expectRejected(_backup(categories: ['纪念日', '   ']));
+    });
+
+    test('分类名超过 20 字', () async {
+      await expectRejected(
+        _backup(categories: [List.filled(21, '长').join()]),
+      );
+    });
+
+    test('分类清单里有重复的名字', () async {
+      await expectRejected(_backup(categories: ['生日', '生日']));
+    });
+
+    test('分类元素不是字符串', () async {
+      await expectRejected(_backup(categories: ['纪念日', 42]));
+    });
+
+    test('导入被拒时本机的分类清单也不能被动过', () async {
+      await store.replaceCategories(['本机自用的分类']);
+
+      await expectRejected(_backup(categories: ['', '']));
+
+      expect(
+        await store.allCategories(),
+        ['本机自用的分类'],
+        reason: '整份备份被拒，本机的分类清单必须原样保留',
+      );
+    });
+
     test('改动记录元素不是对象', () async {
       await expectRejected(_backup(overrides: [123]));
     });
 
     test('恰好卡在上限时可以导入', () async {
       await store.importPayload(
-        _backup(events: _manyEvents(1000), overrides: _manyOverrides(2000)),
+        _backup(
+          events: _manyEvents(1000),
+          overrides: _manyOverrides(2000),
+          categories: _manyCategories(50),
+        ),
       );
 
       expect(await store.allEvents(), hasLength(1000));
       expect(await store.allOverrides(), hasLength(2000));
+      expect(await store.allCategories(), hasLength(50));
+    });
+
+    test('恰好 20 字的分类名可以导入', () async {
+      await store.importPayload(_backup(categories: [List.filled(20, '长').join()]));
+
+      expect(await store.allCategories(), [List.filled(20, '长').join()]);
     });
   });
 }
@@ -489,6 +687,15 @@ CountdownEvent _event(
     reminderHour: reminderHour,
   );
 }
+
+/// 与 [_event] 等价，但能直接给定 createdAt，用来验证「再次保存不冲掉创建时间」。
+CountdownEvent _eventAt(
+  String id, {
+  required String date,
+  int createdAt = 0,
+  String? title,
+}) =>
+    _event(id, date: date, title: title).copyWith(createdAt: createdAt);
 
 DayOverride _override(String origin, {String? title}) {
   return DayOverride(
@@ -535,11 +742,17 @@ List<Map<String, dynamic>> _manyOverrides(int count) => List.generate(
       (index) => _rawOverride('holiday:条目$index:2026-01-01'),
     );
 
+List<String> _manyCategories(int count) =>
+    List.generate(count, (index) => '分类$index');
+
+/// 构造一份待导入的备份。字段默认值都取合法值，用例只覆盖自己要改的那一处，
+/// 免得每次都把一整份合法结构抄一遍。
 Map<String, dynamic> _backup({
   String format = 'daymark.backup',
-  int version = 2,
+  int version = 3,
   Object? events = const <Map<String, dynamic>>[],
   Object? overrides = const <Map<String, dynamic>>[],
+  Object? categories = const <String>['纪念日', '其他'],
 }) =>
     {
       'format': format,
@@ -547,4 +760,5 @@ Map<String, dynamic> _backup({
       'exportedAt': '2026-01-02T03:04:05.000',
       'events': events,
       'overrides': overrides,
+      'categories': categories,
     };

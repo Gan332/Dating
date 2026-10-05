@@ -53,6 +53,14 @@ class _FakeStore extends EventStore {
   @override
   Future<List<DayOverride>> allOverrides() async => List.of(savedOverrides);
 
+  // 分类清单同样要在纯内存环境里给出结果：不覆盖的话会走到基类实现，
+  // 那里要真的开数据库，于是报 databaseFactory not initialized。
+  @override
+  Future<List<String>> allCategories() async => EventStore.defaultCategories;
+
+  @override
+  Future<void> replaceCategories(List<String> names) async {}
+
   @override
   Future<void> save(CountdownEvent event) async {
     events
@@ -108,8 +116,9 @@ class _FakeStore extends EventStore {
   @override
   Future<void> replaceAll(
     List<CountdownEvent> events,
-    List<DayOverride> overrides,
-  ) async {}
+    List<DayOverride> overrides, {
+    List<String>? categories,
+  }) async {}
 }
 
 /// 记录自己收到过什么，好断言控制器交给网关的确实是它自己生成的那一份。
