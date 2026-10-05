@@ -100,7 +100,7 @@ class _FakeStore extends EventStore {
     }
     events
       ..clear()
-      ..addAll(rawEvents.map(CountdownEvent.fromMap));
+      ..addAll(rawEvents.whereType<Map<String, dynamic>>().map(CountdownEvent.fromMap));
     savedOverrides
       ..clear()
       ..addAll(_overridesFrom(decoded['overrides']));
@@ -127,12 +127,6 @@ class _FakeStore extends EventStore {
       ..clear()
       ..addAll(restoredOverrides);
   }
-
-  @override
-  Future<int> importJson(String source) async => 0;
-
-  @override
-  Future<String> exportJson() async => '{}';
 
   @override
   Future<void> save(CountdownEvent event) async {}

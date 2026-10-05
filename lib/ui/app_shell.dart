@@ -1456,9 +1456,9 @@ class SettingsPage extends StatelessWidget {
               ),
             ),
           ),
-          _undoCard(),
+          _undoCard(context),
           const SizedBox(height: 10),
-          _themeCard(),
+          _themeCard(context),
           const SizedBox(height: 10),
           Card(
             elevation: 0,
@@ -1528,7 +1528,7 @@ class SettingsPage extends StatelessWidget {
         ],
       );
 
-  Widget _undoCard() {
+  Widget _undoCard(BuildContext context) {
     final canUndo = controller.canUndo;
     return Card(
       elevation: 0,
@@ -1549,7 +1549,7 @@ class SettingsPage extends StatelessWidget {
     );
   }
 
-  Widget _themeCard() {
+  Widget _themeCard(BuildContext context) {
     final settings = controller.settings;
     final colors = Theme.of(context).colorScheme;
     return Card(
