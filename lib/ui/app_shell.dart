@@ -1029,13 +1029,16 @@ class _ImportantDaysPageState extends State<ImportantDaysPage> {
     final controller = widget.controller;
     final onAdd = widget.onAdd;
     final today = CalendarEngine.dateOnly(DateTime.now());
-    // 自带记录与内置条目一起搜：写「春节」要能搜到官方春节假期。
-    // 控制器内部先按条件筛掉记录再算下一次发生，避免为被筛掉的记录白跑农历换算。
-    final occurrences = controller.searchOccurrences(
-      _term,
-      category: _category,
-      today: today,
-    );
+    // 默认只列用户自己记的条目——这一页叫「重要日」，混进一串节日会冲淡重点，
+    // 也会让「还没有自定义重要日」的空态永远出不来。
+    // 一旦用户主动搜索或按分类筛选，内置假期与传统节日也参与进来，
+    // 这样搜「春节」找得到官方春节假期。
+    final occurrences = filtering
+        ? controller.searchOccurrences(_term, category: _category, today: today)
+        : controller.searchResults(_term, category: _category)
+            .map((event) => CalendarEngine.nextOccurrence(event, today))
+            .whereType<EventOccurrence>()
+            .toList();
     final upcoming = occurrences
         .where((item) => item.daysRemaining >= 0)
         .toList()
@@ -1076,7 +1079,7 @@ class _ImportantDaysPageState extends State<ImportantDaysPage> {
               ),
               const SizedBox(height: 5),
               Text(
-                '纪念日、生日、目标，以及接下来的假期与节日',
+                '你亲手记下的纪念日、生日和目标；搜索时也能找到假期与节日',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
