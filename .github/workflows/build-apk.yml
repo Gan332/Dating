@@ -109,6 +109,10 @@ jobs:
       - name: Fetch Dart dependencies
         run: flutter pub get
 
+      # 早失败：语法/类型/lint 问题在几十秒内暴露，而不是等 Gradle 跑满几分钟。
+      - name: Static analysis
+        run: flutter analyze
+
       - name: Build release APK
         run: flutter build apk --release
 

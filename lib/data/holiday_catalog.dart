@@ -46,10 +46,13 @@ class HolidayCatalog {
   static bool isMakeupWorkday(DateTime date) =>
       _makeupWorkdays.contains(_key(date));
 
-  static List<DateTime> makeupWorkdays(int year) =>
-      year == publishedYear
-          ? _makeupWorkdays.map(DateTime.parse).toList()..sort()
-          : const [];
+  // 用块函数体避免级联运算符 `..` 出现在条件表达式里——`? a..b() : c` 不是合法的
+  // Dart 语法，会让 kernel 编译直接失败。
+  static List<DateTime> makeupWorkdays(int year) {
+    if (year != publishedYear) return const [];
+    final days = _makeupWorkdays.map(DateTime.parse).toList()..sort();
+    return List.unmodifiable(days);
+  }
 
   static String _key(DateTime date) =>
       date.year.toString().padLeft(4, '0') +
