@@ -5,6 +5,10 @@
 .pub-cache/
 build/
 coverage/
+# 这两个由 flutter pub get / 构建生成，内容随本机依赖版本漂移，
+# 提交它们只会制造无意义的 diff（应用本身也不用锁依赖版本）。
+pubspec.lock
+android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
 android/.gradle/
 android/local.properties
 android/key.properties
