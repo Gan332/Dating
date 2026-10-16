@@ -46,6 +46,14 @@ Run workflow 都会触发。流程是 ubuntu + JDK 17 + Flutter stable + Rust �
 `flutter build appbundle --release`，最后把 APK 与 AAB 作为 Artifacts 上传（保留 30 天），
 可在该次运行页面下载。
 
-release 版本当前使用 debug 密钥签名，便于直接安装验证；正式发布请换成自己的发布密钥。
+release 版本默认用 debug 密钥签名，便于直接安装验证；配好发布密钥后会自动改用它。做法是生成一次 keystore，再把密钥与密码写进 `android/key.properties`（该文件不入库）：
+
+    keytool -genkeypair -v -storetype PKCS12 -keystore daymark-release.jks \
+      -alias daymark -keyalg RSA -keysize 4096 -validity 10000 \
+      -dname "CN=daymark, O=daymark, C=CN"
+
+CI 侧改为从仓库 secrets 还原：`DAYMARK_KEYSTORE_BASE64`、`DAYMARK_KEYSTORE_PASSWORD`、`DAYMARK_KEY_ALIAS`、`DAYMARK_KEY_PASSWORD`。构建后用 `apksigner --print-certs` 核对证书指纹，指纹不对会让流水线失败。**keystore 必须离线备份**：它丢了，这个包名就再也无法在应用商店更新，只能换包名重新上架。
+
+包名 `com.example.daymark` 适合自己分发与 sideload；要上 Google Play 必须先改掉——Play 不接受 `com.example.` 开头的 applicationId，而上架后再改包名等于上架一个新应用，用户与评论都不会跟过去。
 
 2026 官方安排来源：国务院办公厅《国务院办公厅关于2026年部分节假日安排的通知》（国办发明电〔2025〕7号，2025-11-04）。未来年度安排需在正式通知发布后更新 lib/data/holiday_catalog.dart。
