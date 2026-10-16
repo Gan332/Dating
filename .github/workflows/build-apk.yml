@@ -196,22 +196,50 @@ jobs:
         run: flutter build apk --release --target-platform android-arm,android-arm64
 
       # 签名必须验一次：secrets 里错一位、或者悄悄回落成 debug 签名，
-      # 只有这一行看得出来。指纹要与 keytool 打印的一致。
+      # 只有这一步看得出来。仓库是 public，这是唯一能确认签名正确的方式。
       - name: Verify APK signatures
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          # 发布证书的 SHA-256 指纹（公开信息，APK 里本来就有；与 keytool -list 打印的一致）。
+          EXPECTED_SHA256="8dd8a9be35cd0e3b2badea7d5b1ca6161a77134f97bc1c73a159aca2d3d07d57"
           SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           APKSIGNER="$(find "$SDK_ROOT/build-tools" -type f -name apksigner 2>/dev/null | sort | tail -n1 || true)"
           if [ -z "$APKSIGNER" ]; then
             echo "::warning::找不到 apksigner，跳过签名校验"
             exit 0
           fi
+          # 还原过密钥才谈得上「指纹必须是发布证书」。
+          if [ -f android/key.properties ]; then
+            signed_with_release=true
+          else
+            signed_with_release=false
+            echo "本次没有发布密钥，签名指纹只做记录（期望是 debug 证书）。"
+          fi
+
           status=0
           for apk in build/app/outputs/flutter-apk/*.apk; do
-            echo "== $(basename "$apk")" | tee -a "$GITHUB_STEP_SUMMARY"
-            "$APKSIGNER" verify --print-certs "$apk" \
-              | grep -E 'Verified using|Signer #1 certificate (DN|SHA-256)' \
-              | tee -a "$GITHUB_STEP_SUMMARY" || status=1
+            name="$(basename "$apk")"
+            # 2>&1：apksigner 出错时信息在 stderr，别让它悄悄溜走。
+            if ! out="$("$APKSIGNER" verify --print-certs "$apk" 2>&1)"; then
+              echo "::error::$name 验签未通过"
+              printf '%s\n' "$out"
+              status=1
+              continue
+            fi
+            echo "== $name"
+            printf '%s\n' "$out" | head -n 12
+            digest="$(printf '%s\n' "$out" \
+              | grep -ioE 'sha-?256[^0-9a-f]*[0-9a-f]{64}' \
+              | grep -ioE '[0-9a-f]{64}' | head -n1 | tr 'A-F' 'a-f')"
+            dn="$(printf '%s\n' "$out" | grep -i 'certificate dn' | head -n1 | sed 's/^ *//')"
+            {
+              echo "- **${name}**：${dn:-证书 DN 解析不出}"
+              echo "  - SHA-256 \`${digest:-解析不出}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            if [ "$signed_with_release" = "true" ] && [ "$digest" != "$EXPECTED_SHA256" ]; then
+              echo "::error::$name 的签名指纹不是发布证书（实际 '${digest:-空}'），检查 DAYMARK_KEYSTORE_BASE64 与 key.properties"
+              status=1
+            fi
           done
           exit "$status"
 
