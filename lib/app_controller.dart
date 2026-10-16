@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import 'core/calendar_engine.dart';
 import 'data/backup_file_gateway.dart';
+import 'data/cover_store.dart';
 import 'data/event_store.dart';
 import 'data/holiday_catalog.dart';
 import 'data/holiday_repository.dart';
@@ -39,12 +40,14 @@ class AppController extends ChangeNotifier {
     SettingsStore? settingsStore,
     HolidayRepository? holidays,
     BackupFileGateway? backupFiles,
+    CoverStore? covers,
     this.timeout = stepTimeout,
   })  : _store = store ?? EventStore(),
         _reminders = reminders ?? ReminderService.instance,
         _settingsStore = settingsStore ?? SettingsStore(),
         _holidays = holidays ?? HolidayRepository(),
-        _backupFiles = backupFiles ?? PluginBackupFileGateway();
+        _backupFiles = backupFiles ?? PluginBackupFileGateway(),
+        _covers = covers ?? FileCoverStore();
 
   /// 单个启动步骤的上限。插件通道或文件系统一旦无响应，也要让界面出来，
   /// 而不是让用户对着启动转圈无限等待。
@@ -61,6 +64,9 @@ class AppController extends ChangeNotifier {
   /// 备份文件的读写通道。剪贴板那条路不可靠——下一次复制就会冲掉备份，
   /// 换手机更是直接丢，所以正式入口走文件。
   final BackupFileGateway _backupFiles;
+
+  /// 封面图的存取通道。目录与时钟都可注入，测试用临时目录，真机走 path_provider。
+  final CoverStore _covers;
 
   List<CountdownEvent> _events = const [];
   final Map<String, DayOverride> _overrides = {};
@@ -119,6 +125,29 @@ class AppController extends ChangeNotifier {
     final windowEnd = start.add(Duration(days: days));
     final found = <EventOccurrence>[];
 
+    // 内置条目的构造收在一处：加字段（reminderHour、coverPath…）时只改这里，
+    // 免得「官方假期」与「传统节日」两条分支各漏一次。
+    EventOccurrence occurrenceOf({
+      required String title,
+      required DateTime date,
+      required String subtitle,
+      required String origin,
+      required DayOverride? patch,
+    }) =>
+        EventOccurrence(
+          title: title,
+          date: date,
+          daysRemaining: CalendarEngine.daysBetween(start, date),
+          subtitle: subtitle,
+          origin: origin,
+          overridden: patch != null,
+          reminderDays: patch?.reminderDays ?? -1,
+          // 时刻与封面都来自改动记录：不填的话界面会按默认值显示，
+          // 与用户实际设的那一刻、选的那张图对不上。
+          reminderHour: patch?.reminderHour ?? 9,
+          coverPath: patch?.coverPath,
+        );
+
     for (final span in HolidayCatalog.spansForYear(start.year)) {
       if (span.end.isBefore(start)) continue;
       final origin = CalendarEngine.holidayOrigin(span.name, span.start);
@@ -133,19 +162,14 @@ class AppController extends ChangeNotifier {
           : (span.start.isBefore(start) ? start : span.start);
       if (date.isAfter(windowEnd)) continue;
       found.add(
-        EventOccurrence(
+        occurrenceOf(
           title: patch?.title ?? span.name,
           date: date,
-          daysRemaining: CalendarEngine.daysBetween(start, date),
           subtitle: patch == null
               ? '${HolidayCatalog.publishedYear} 官方假期'
               : '${HolidayCatalog.publishedYear} 官方假期 · 已改动',
           origin: origin,
-          overridden: patch != null,
-          reminderDays: patch?.reminderDays ?? -1,
-          // 时刻也来自改动记录：不填的话详情页会按默认 9 点显示，
-          // 与真正会响的那一刻对不上。
-          reminderHour: patch?.reminderHour ?? 9,
+          patch: patch,
         ),
       );
     }
@@ -162,15 +186,12 @@ class AppController extends ChangeNotifier {
             ? patched
             : entry.key;
         found.add(
-          EventOccurrence(
+          occurrenceOf(
             title: patch?.title ?? name,
             date: date,
-            daysRemaining: CalendarEngine.daysBetween(start, date),
             subtitle: patch == null ? '传统节日' : '传统节日 · 已改动',
             origin: origin,
-            overridden: patch != null,
-            reminderDays: patch?.reminderDays ?? -1,
-            reminderHour: patch?.reminderHour ?? 9,
+            patch: patch,
           ),
         );
       }
@@ -291,6 +312,9 @@ class AppController extends ChangeNotifier {
       // 在线放假安排先用缓存，后台再试一次更新。
       unawaited(_applyCachedHolidays());
       unawaited(_silentHolidayRefresh());
+      // 封面文件的清理放在启动：改动当时不删文件，撤销才把记录连同封面一起
+      // 还回来（见 _sweepCovers）。
+      unawaited(_sweepCovers());
     } catch (error, stack) {
       _loadError = _describe(error);
       debugPrint('启动载入失败：$_loadError\n$stack');
@@ -692,6 +716,9 @@ class AppController extends ChangeNotifier {
       await _settingsStore.save(_settings);
     }
     await _refresh();
+    // 备份里只有文件名、没有图片本体（JSON 装不下图），导入后这些名字一个都指不到
+    // 真实文件，顺手把没人引用的封面清掉。
+    await _sweepCovers();
     return count;
   }
 
@@ -730,6 +757,27 @@ class AppController extends ChangeNotifier {
     _categories = await _store.allCategories();
     notifyListeners();
     await _rescheduleReminders();
+  }
+
+  /// 还在用的封面文件名：记录上的 + 内置条目改动上的。
+  Set<String> _coversInUse() => {
+        for (final event in _events)
+          if (event.coverPath case final String name) name,
+        for (final override in _overrides.values)
+          if (override.coverPath case final String name) name,
+      };
+
+  /// 清掉没人再引用的封面文件。
+  ///
+  /// 删记录、恢复默认、换图、导入备份之后都会留下孤儿，但**改动当时不删文件**：
+  /// 「撤销」要把记录连同封面一起还回来，立刻删就把图删没了。清理放在启动之后与
+  /// 导入之后各跑一次；即使失败也只是多占一点空间，不影响任何一条记录。
+  Future<void> _sweepCovers() async {
+    try {
+      await _covers.removeOrphans(_coversInUse());
+    } catch (error, stack) {
+      debugPrint('清理孤儿封面失败：$error\n$stack');
+    }
   }
 
   Future<void> _rescheduleReminders() async {

@@ -391,16 +391,27 @@ class EventStore {
     await database.transaction((transaction) async {
       await transaction.delete('events');
       for (final event in events) {
-        await transaction.insert('events', event.toMap());
+        await transaction.insert('events', _withoutCover(event.toMap()));
       }
       await transaction.delete('day_overrides');
       for (final override in overrides) {
-        await transaction.insert('day_overrides', override.toMap());
+        await transaction.insert(
+          'day_overrides',
+          _withoutCover(override.toMap()),
+        );
       }
       await transaction.delete('categories');
       await _writeCategories(transaction, categories);
     });
     return events.length;
+  }
+
+  /// 去掉封面字段的一行。导入备份时用：备份是纯文本 JSON，装不下图片本体，
+  /// 文件名带过来也指不到任何文件，留着只会让界面去读一个不存在的封面。
+  /// 清空之后用户重新选图即可，胜过留一个永远显示不出来的破图。
+  static Map<String, Object?> _withoutCover(Map<String, Object?> row) {
+    if (row['coverPath'] == null) return row;
+    return {...row, 'coverPath': null};
   }
 
   /// 从备份里取出分类清单，缺失时按记录里实际用到的分类推导。
