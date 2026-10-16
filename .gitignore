@@ -12,6 +12,10 @@ android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
 android/.gradle/
 android/local.properties
 android/key.properties
+# 发布密钥本体一律不进仓库。真机上它放在仓库之外（见 README 的发布说明），
+# 这里再兜一道，避免哪天手滑 cp 进来。
+*.jks
+*.keystore
 android/app/debug/
 android/app/profile/
 android/app/release/

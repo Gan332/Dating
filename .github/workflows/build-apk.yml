@@ -165,10 +165,55 @@ jobs:
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v6
 
+      # 发布密钥只经 secrets 传递：仓库是 public，构建日志与产物都是公开的。
+      # secrets 缺失（fork 与 PR）时不写 key.properties，Gradle 会回落 debug 签名。
+      - name: Restore release keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.DAYMARK_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.DAYMARK_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.DAYMARK_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.DAYMARK_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_B64}" ]; then
+            echo "未配置发布密钥 secrets，本次按 debug 签名构建（fork/PR 的正常路径）。" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # base64 里不该有换行；真带了就剔掉，避免解码出一堆坏字节。
+          printf '%s' "${KEYSTORE_B64}" | tr -d '\n\r' | base64 -d > android/app/daymark-release.jks
+          {
+            echo "storeFile=daymark-release.jks"
+            echo "storePassword=${STORE_PASSWORD}"
+            echo "keyAlias=${KEY_ALIAS}"
+            echo "keyPassword=${KEY_PASSWORD}"
+          } > android/key.properties
+          chmod 600 android/app/daymark-release.jks android/key.properties
+          echo "已写入发布密钥，本次构建使用发布签名。" >> "$GITHUB_STEP_SUMMARY"
+
       # 一次构建同时产出 universal 与单 ABI 包（ABI 拆分配在 build.gradle.kts）。
       # --target-platform 限定引擎只打包 arm/arm64，否则 universal 会混进 x86_64（约 +20 MB）。
       - name: Build release APKs
         run: flutter build apk --release --target-platform android-arm,android-arm64
+
+      # 签名必须验一次：secrets 里错一位、或者悄悄回落成 debug 签名，
+      # 只有这一行看得出来。指纹要与 keytool 打印的一致。
+      - name: Verify APK signatures
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          APKSIGNER="$(find "$SDK_ROOT/build-tools" -type f -name apksigner 2>/dev/null | sort | tail -n1 || true)"
+          if [ -z "$APKSIGNER" ]; then
+            echo "::warning::找不到 apksigner，跳过签名校验"
+            exit 0
+          fi
+          status=0
+          for apk in build/app/outputs/flutter-apk/*.apk; do
+            echo "== $(basename "$apk")" | tee -a "$GITHUB_STEP_SUMMARY"
+            "$APKSIGNER" verify --print-certs "$apk" \
+              | grep -E 'Verified using|Signer #1 certificate (DN|SHA-256)' \
+              | tee -a "$GITHUB_STEP_SUMMARY" || status=1
+          done
+          exit "$status"
 
       # AAB：上架后由商店按设备 ABI/密度分发；arm + arm64 覆盖新旧设备。
       - name: Build App Bundle

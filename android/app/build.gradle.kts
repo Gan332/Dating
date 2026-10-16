@@ -1,4 +1,5 @@
 import org.gradle.api.tasks.Exec
+import java.util.Properties
 
 /**
  * 只打包真机用的两套 ABI：一个包里塞三套原生库会让 APK 直接大三倍
@@ -32,6 +33,17 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("dev.flutter.flutter-gradle-plugin")
 }
+
+/**
+ * 发布签名：密钥与密码放在 android/key.properties（已由 .gitignore 排除，不进仓库）。
+ * 文件不存在就回落 debug 签名 —— 任何人 clone 下来都能构建出可安装的 APK，
+ * CI 上 fork/PR 拿不到 secrets 时走的也是这条路。
+ */
+val releaseKeyProperties = Properties().apply {
+    val keyFile = rootProject.file("key.properties")
+    if (keyFile.exists()) keyFile.inputStream().use { load(it) }
+}
+val hasReleaseKey = releaseKeyProperties.getProperty("storeFile") != null
 
 android {
     namespace = "com.example.daymark"
@@ -68,11 +80,27 @@ android {
         }
     }
 
+    signingConfigs {
+        if (hasReleaseKey) {
+            create("release") {
+                // 相对路径按 app 模块目录解析，与 CI 写入 android/app/ 的位置对得上。
+                storeFile = file(releaseKeyProperties.getProperty("storeFile"))
+                storePassword = releaseKeyProperties.getProperty("storePassword")
+                keyAlias = releaseKeyProperties.getProperty("keyAlias")
+                keyPassword = releaseKeyProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // 仓库未内置发布密钥：先用 debug 密钥签名，保证构建出的 APK 可直接安装。
-            // 正式发布时改为读取 android/key.properties 中的发布密钥即可。
-            signingConfig = signingConfigs.getByName("debug")
+            // 有 android/key.properties 就用发布密钥签名；没有就回落 debug，
+            // 保证构建出的包仍可直接安装。上架必须走发布密钥那条路。
+            signingConfig = if (hasReleaseKey) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }
