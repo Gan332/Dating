@@ -36,13 +36,34 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Precache Flutter Android artifacts
-        run: flutter precache --android || flutter precache
-
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      # ---- 验证阶段：不需要 Android SDK/NDK，先跑完，别让打包用的基础设施挡住回归 ----
+
+      - name: Fetch Dart dependencies
+        run: flutter pub get
+
+      # Rust 日期核心的单元测试同样秒级，先于 Flutter/Gradle 阶段执行，让回归立刻暴露。
+      - name: Rust unit tests
+        run: cargo test --manifest-path rust/Cargo.toml
+
+      # 早失败：先跑秒级的 Rust 核心测试，再跑语法/类型/lint，而不是等 Gradle 跑满几分钟。
+      - name: Static analysis
+        run: flutter analyze
+
+      - name: Unit tests
+        run: flutter test
+
+      # ---- 打包阶段：以下步骤都要 Android 工具链，放在验证之后 ----
+      #
+      # 顺序刻意保持「先验证、后打包」：runner 镜像换版曾让 sdkmanager 从 PATH 上消失，
+      # 那时 NDK 安装一挂，连 flutter analyze / flutter test 都轮不到跑，回归报告全丢。
+
+      - name: Precache Flutter Android artifacts
+        run: flutter precache --android || flutter precache
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -56,7 +77,6 @@ jobs:
       - name: Install Android NDK
         run: |
           set -euo pipefail
-          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           FLUTTER_BIN="$(readlink -f "$(command -v flutter)")"
           FLUTTER_ROOT="${FLUTTER_ROOT:-$(dirname "$(dirname "$FLUTTER_BIN")")}"
           EXT="$FLUTTER_ROOT/packages/flutter_tools/gradle/src/main/kotlin/FlutterExtension.kt"
@@ -69,11 +89,43 @@ jobs:
           fi
           NDK_VERSION="${NDK_VERSION:-28.2.13676358}"
           echo "Android NDK version required by Flutter: $NDK_VERSION"
-          if [ ! -d "$SDK_ROOT/ndk/$NDK_VERSION" ]; then
-            yes | sdkmanager --licenses > /dev/null || true
-            sdkmanager "ndk;$NDK_VERSION"
+
+          # SDK 根目录：环境变量优先，其次问 Flutter 自己，最后才猜常见路径。
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "$SDK_ROOT" ] || [ ! -d "$SDK_ROOT" ]; then
+            SDK_ROOT="$(flutter doctor -v 2>/dev/null | sed -n 's/.*Android SDK at \(.*\)$/\1/p' | head -n1 || true)"
           fi
+          if [ -z "$SDK_ROOT" ] || [ ! -d "$SDK_ROOT" ]; then
+            for candidate in /usr/local/lib/android/sdk "$HOME/Android/Sdk" /opt/android-sdk /usr/lib/android-sdk; do
+              if [ -d "$candidate" ]; then SDK_ROOT="$candidate"; break; fi
+            done
+          fi
+          echo "Using Android SDK at: ${SDK_ROOT:-<not found>}"
+
+          if [ -d "$SDK_ROOT/ndk/$NDK_VERSION" ]; then
+            echo "NDK $NDK_VERSION already installed."
+          else
+            # sdkmanager 不一定在 PATH 上（runner 镜像换版会挪走它），自己找一遍。
+            SDKMANAGER="$(command -v sdkmanager 2>/dev/null || true)"
+            if [ -z "$SDKMANAGER" ] && [ -d "$SDK_ROOT/cmdline-tools" ]; then
+              SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -maxdepth 3 -type f -name sdkmanager 2>/dev/null | sort | tail -n1 || true)"
+            fi
+            if [ -z "$SDKMANAGER" ] && [ -x "$SDK_ROOT/tools/bin/sdkmanager" ]; then
+              SDKMANAGER="$SDK_ROOT/tools/bin/sdkmanager"
+            fi
+            if [ -z "$SDKMANAGER" ]; then
+              echo "::error::找不到 sdkmanager，装不了 NDK $NDK_VERSION。SDK_ROOT=${SDK_ROOT:-<empty>}"
+              ls -la "${SDK_ROOT:-/nonexistent}" 2>/dev/null || true
+              ls -la "${SDK_ROOT:-/nonexistent}/cmdline-tools" 2>/dev/null || true
+              exit 1
+            fi
+            echo "Using sdkmanager at: $SDKMANAGER"
+            yes | "$SDKMANAGER" --licenses > /dev/null || true
+            "$SDKMANAGER" "ndk;$NDK_VERSION"
+          fi
+
           NDK_DIR="$SDK_ROOT/ndk/$NDK_VERSION"
+          test -d "$NDK_DIR"
           echo "Using NDK at $NDK_DIR"
           echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$NDK_DIR" >> "$GITHUB_ENV"
@@ -112,20 +164,6 @@ jobs:
 
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v6
-
-      - name: Fetch Dart dependencies
-        run: flutter pub get
-
-      # Rust 日期核心的单元测试同样秒级，先于 Flutter/Gradle 阶段执行，让回归立刻暴露。
-      - name: Rust unit tests
-        run: cargo test --manifest-path rust/Cargo.toml
-
-      # 早失败：先跑秒级的 Rust 核心测试，再跑语法/类型/lint，而不是等 Gradle 跑满几分钟。
-      - name: Static analysis
-        run: flutter analyze
-
-      - name: Unit tests
-        run: flutter test
 
       # 一次构建同时产出 universal 与单 ABI 包（ABI 拆分配在 build.gradle.kts）。
       # --target-platform 限定引擎只打包 arm/arm64，否则 universal 会混进 x86_64（约 +20 MB）。
