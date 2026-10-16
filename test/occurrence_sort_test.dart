@@ -172,15 +172,15 @@ void main() {
     });
 
     test('老设置没有这个键时回落到默认', () {
-      final json = AppSettings().toJson()..remove('sortMode');
+      final json = const AppSettings().toJson()..remove('sortMode');
       expect(AppSettings.fromJson(json).sortMode, AppSortMode.upcoming);
     });
 
     test('写坏的值同样回落，而不是崩在启动里', () {
-      final wrong = AppSettings().toJson()..['sortMode'] = '按运气排';
+      final wrong = const AppSettings().toJson()..['sortMode'] = '按运气排';
       expect(AppSettings.fromJson(wrong).sortMode, AppSortMode.upcoming);
 
-      final nulled = AppSettings().toJson()..['sortMode'] = null;
+      final nulled = const AppSettings().toJson()..['sortMode'] = null;
       expect(AppSettings.fromJson(nulled).sortMode, AppSortMode.upcoming);
     });
   });

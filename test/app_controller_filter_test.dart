@@ -107,6 +107,13 @@ class _FakeReminders implements ReminderScheduler {
 
   @override
   Future<void> cancelAll() async {}
+
+  /// 测试环境没有系统权限可谈：精确闹钟一律当作拿不到，走不精确那条路。
+  @override
+  Future<bool> canScheduleExactly() async => false;
+
+  @override
+  Future<bool> requestExactAlarmsPermission() async => false;
 }
 
 class _FakeHolidays extends HolidayRepository {

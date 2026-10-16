@@ -26,15 +26,11 @@ abstract class ReminderScheduler {
   Future<void> scheduleEvents(List<CountdownEvent> events);
 
   Future<void> cancelAll();
-}
 
-/// 「能不能在设定时刻准时提醒」这个**可选能力**。
-///
-/// 单独一个接口，而不是往 [ReminderScheduler] 上加方法：准时与否取决于系统版本
-/// 与用户授权（Android 12+ 默认不给），它是插件实现的能力，不是控制器需要的
-/// 契约。塞进主接口会让三个测试假实现跟着改，而它们本来就无法回答这个问题。
-abstract class ExactAlarmSupport {
   /// 系统是否已经允许精确提醒。
+  ///
+  /// 单纯的状态查询：拿不到就返回 false，提醒照常安排、只是可能晚一些，所以既
+  /// 不拦任何操作，也不许抛异常（与「可选能力不抛错」的约定一致）。
   Future<bool> canScheduleExactly();
 
   /// 跳到系统的「闹钟和提醒」授权页；返回是否已经拿到权限。
@@ -71,7 +67,7 @@ int notificationId(String eventId, int occurrenceIndex) {
   return ((hash * 2) + occurrenceIndex) & 0x7fffffff;
 }
 
-class ReminderService implements ReminderScheduler, ExactAlarmSupport {
+class ReminderService implements ReminderScheduler {
   ReminderService();
 
   static final ReminderService instance = ReminderService();

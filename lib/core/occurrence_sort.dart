@@ -24,7 +24,8 @@ List<EventOccurrence> sortOccurrences(
   // 用 switch 表达式而不是 if/else：以后加了新模式，这里会因穷尽性检查直接编译
   // 不过，而不是安静地落进 else 里按剩余天数排。
   return switch (mode) {
-    AppSortMode.upcoming => _byRemaining(items, mostRecentFirst),
+    AppSortMode.upcoming =>
+      _byRemaining(items, mostRecentFirst: mostRecentFirst),
     AppSortMode.createdAt => _byCreatedAt(items),
     AppSortMode.category => _byCategory(items, categoryOf, categoryOrder),
   };

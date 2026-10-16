@@ -655,19 +655,12 @@ class AppController extends ChangeNotifier {
   /// 系统是否允许精确提醒。
   ///
   /// 只用来显示状态：不允许时提醒照常安排，只是可能比设定时刻晚一些，
-  /// 所以既不拦操作、也不报错。[ReminderScheduler] 之外的能力，假实现不提供。
-  Future<bool> canScheduleExactly() async {
-    final reminders = _reminders;
-    if (reminders is! ExactAlarmSupport) return false;
-    return reminders.canScheduleExactly();
-  }
+  /// 所以既不拦操作、也不报错。
+  Future<bool> canScheduleExactly() => _reminders.canScheduleExactly();
 
   /// 跳到系统的「闹钟和提醒」授权页；返回是否已经拿到权限。
-  Future<bool> requestExactReminders() async {
-    final reminders = _reminders;
-    if (reminders is! ExactAlarmSupport) return false;
-    return reminders.requestExactAlarmsPermission();
-  }
+  Future<bool> requestExactReminders() =>
+      _reminders.requestExactAlarmsPermission();
 
   // -------------------------------------------------------- 备份与恢复
 
