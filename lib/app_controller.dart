@@ -143,6 +143,9 @@ class AppController extends ChangeNotifier {
           origin: origin,
           overridden: patch != null,
           reminderDays: patch?.reminderDays ?? -1,
+          // 时刻也来自改动记录：不填的话详情页会按默认 9 点显示，
+          // 与真正会响的那一刻对不上。
+          reminderHour: patch?.reminderHour ?? 9,
         ),
       );
     }
@@ -167,6 +170,7 @@ class AppController extends ChangeNotifier {
             origin: origin,
             overridden: patch != null,
             reminderDays: patch?.reminderDays ?? -1,
+            reminderHour: patch?.reminderHour ?? 9,
           ),
         );
       }

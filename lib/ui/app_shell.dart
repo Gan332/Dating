@@ -13,6 +13,7 @@ import '../models/app_settings.dart';
 import '../models/countdown_event.dart';
 import '../core/year_progress.dart';
 import 'day_override_editor.dart';
+import 'event_detail_page.dart';
 import 'event_editor.dart';
 
 class AppShell extends StatefulWidget {
@@ -105,6 +106,24 @@ class _AppShellState extends State<AppShell> {
     await _runMutation(
       () => widget.controller.saveEvent(result),
       '已保存「${result.title}」',
+    );
+  }
+
+  /// 点条目：先进详情页，编辑与删除在详情页里。
+  ///
+  /// 以前是直接弹编辑器。现在多一次点击，换来的是历次发生的时间线 —— 「这件事已经
+  /// 持续多久」是纪念日最打动人的部分，藏在编辑器里等于没有。真想直接改的，列表
+  /// 条目右上角的「更多操作 → 编辑」仍然一步到位。
+  Future<void> _openDetail(EventOccurrence item) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => EventDetailPage(
+          item: item,
+          controller: widget.controller,
+          onEdit: _editOccurrence,
+          onDelete: _deleteOccurrence,
+        ),
+      ),
     );
   }
 
@@ -210,6 +229,7 @@ class _AppShellState extends State<AppShell> {
       HomePage(
         controller: widget.controller,
         onAdd: () => _editEvent(),
+        onOpen: _openDetail,
         onEdit: _editOccurrence,
         onDelete: _deleteOccurrence,
         onMutate: _runMutation,
@@ -219,6 +239,7 @@ class _AppShellState extends State<AppShell> {
       ImportantDaysPage(
         controller: widget.controller,
         onAdd: () => _editEvent(),
+        onOpen: _openDetail,
         onEdit: _editOccurrence,
         onDelete: _deleteOccurrence,
         onMutate: _runMutation,
@@ -294,6 +315,7 @@ class HomePage extends StatefulWidget {
     super.key,
     required this.controller,
     required this.onAdd,
+    required this.onOpen,
     required this.onEdit,
     required this.onDelete,
     required this.onMutate,
@@ -302,8 +324,14 @@ class HomePage extends StatefulWidget {
 
   final AppController controller;
   final VoidCallback onAdd;
-  final ValueChanged<EventOccurrence> onEdit;
-  final ValueChanged<EventOccurrence> onDelete;
+
+  /// 点条目：打开详情页。编辑与删除在详情页里进行。
+  final ValueChanged<EventOccurrence> onOpen;
+
+  /// 溢出菜单里的「编辑」：跳过详情页，直接弹编辑器。
+  final Future<void> Function(EventOccurrence) onEdit;
+
+  final Future<void> Function(EventOccurrence) onDelete;
   final MutationRunner onMutate;
 
   /// 首页条目多到一屏放不下时，点「查看全部」跳到重要日页。
@@ -481,7 +509,10 @@ class _HomePageState extends State<HomePage> {
                         occurrence: item,
                         selectionMode: _selection.active,
                         selected: _selection.contains(item),
-                        onEdit: () => _handleTap(item),
+                        onOpen: () => _handleTap(item),
+                        // 溢出菜单里的「编辑」直接开编辑器。点条目本体才进详情页，
+                        // 菜单写着「编辑」却又要多点一次，等于白骗一次点击。
+                        onEdit: () => widget.onEdit(item),
                         onLongPress: () =>
                             setState(() => _selection.select(item)),
                         onDelete: () => widget.onDelete(item),
@@ -512,12 +543,13 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  /// 点条目：多选时切换选中，否则打开详情页。
   void _handleTap(EventOccurrence item) {
     if (_selection.active) {
       setState(() => _selection.toggle(item));
       return;
     }
-    widget.onEdit(item);
+    widget.onOpen(item);
   }
 
   Future<void> _batchCategory() async {
@@ -697,7 +729,7 @@ class _HeroCountdown extends StatelessWidget {
                 ),
                 // 已经过去多少天、第几周年。倒数日应用最打动人的是「相伴多久」，
                 // 算不出来时整行不出现。
-                if (_milestoneTextOf(item) case final text?) ...[
+                if (CalendarEngine.milestoneTextOf(item) case final text?) ...[
                   const SizedBox(height: 6),
                   Text(
                     text,
@@ -748,18 +780,6 @@ class _HeroCountdown extends StatelessWidget {
 
 }
 
-/// 里程碑文案（已过天数 + 周年）；算不出来时返回 null，调用方据此整行隐藏。
-///
-/// 首页大卡片与列表条目共用这一个实现，免得两处对「算不出」的口径不一致。
-String? _milestoneTextOf(EventOccurrence item) {
-  final event = item.event;
-  if (event == null) return null;
-  final milestone = CalendarEngine.milestoneFor(event, item.date);
-  if (milestone == null) return null;
-  final text = CalendarEngine.milestoneSummary(milestone);
-  return text.isEmpty ? null : text;
-}
-
 class _QuickStat extends StatelessWidget {
   const _QuickStat({required this.icon, required this.value, required this.label});
 
@@ -799,6 +819,7 @@ class _QuickStat extends StatelessWidget {
 class _OccurrenceTile extends StatelessWidget {
   const _OccurrenceTile({
     required this.occurrence,
+    this.onOpen,
     this.onEdit,
     this.onDelete,
     this.onLongPress,
@@ -807,7 +828,16 @@ class _OccurrenceTile extends StatelessWidget {
   });
 
   final EventOccurrence occurrence;
+
+  /// 点条目本体：打开详情页（多选模式下是切换选中）。
+  final VoidCallback? onOpen;
+
+  /// 溢出菜单里的「编辑」：跳过详情页，直接开编辑器。
+  ///
+  /// 与 [onOpen] 分开是因为两者语义不同：一个「看看这条」，一个「改这条」。
+  /// 合并成一个回调会让菜单上写着「编辑」的那一项打开详情页。
   final VoidCallback? onEdit;
+
   final VoidCallback? onDelete;
   final VoidCallback? onLongPress;
   final bool selectionMode;
@@ -834,7 +864,7 @@ class _OccurrenceTile extends StatelessWidget {
     // 只有自带记录才有「从最初那一天算起」的意义：内置条目的 date 就是它
     // 本身，算出来只会是一句没有信息量的「今天就是这一天」。算不出时为 null，
     // 整行不渲染。
-    final milestoneText = _milestoneTextOf(occurrence);
+    final milestoneText = CalendarEngine.milestoneTextOf(occurrence);
     return _Pressable(
       child: Card(
       margin: EdgeInsets.zero,
@@ -842,7 +872,7 @@ class _OccurrenceTile extends StatelessWidget {
       color: selected ? colors.secondaryContainer : colors.surfaceContainerLow,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       child: InkWell(
-        onTap: onEdit,
+        onTap: onOpen,
         onLongPress: onLongPress,
         borderRadius: BorderRadius.circular(24),
         child: Padding(
@@ -852,7 +882,7 @@ class _OccurrenceTile extends StatelessWidget {
               if (selectionMode)
                 Checkbox(
                   value: selected,
-                  onChanged: (_) => onEdit?.call(),
+                  onChanged: (_) => onOpen?.call(),
                 )
               else
                 Container(
@@ -936,7 +966,8 @@ class _OccurrenceTile extends StatelessWidget {
                     if (value == 'delete') onDelete?.call();
                   },
                   itemBuilder: (context) => [
-                    const PopupMenuItem(value: 'edit', child: Text('编辑')),
+                    if (onEdit != null)
+                      const PopupMenuItem(value: 'edit', child: Text('编辑')),
                     PopupMenuItem(
                       value: 'delete',
                       child:
@@ -1017,6 +1048,7 @@ class ImportantDaysPage extends StatefulWidget {
     super.key,
     required this.controller,
     required this.onAdd,
+    this.onOpen,
     required this.onEdit,
     required this.onDelete,
     required this.onMutate,
@@ -1024,7 +1056,13 @@ class ImportantDaysPage extends StatefulWidget {
 
   final AppController controller;
   final VoidCallback onAdd;
+
+  /// 点条目：打开详情页。为空时退回直接编辑（测试与嵌入场景不必提供）。
+  final ValueChanged<EventOccurrence>? onOpen;
+
+  /// 改写这条：列表条目「更多操作 → 编辑」，以及没提供 [onOpen] 时点条目本体。
   final ValueChanged<EventOccurrence> onEdit;
+
   final ValueChanged<EventOccurrence> onDelete;
   final MutationRunner onMutate;
 
@@ -1198,7 +1236,9 @@ class _ImportantDaysPageState extends State<ImportantDaysPage> {
                           occurrence: item,
                           selectionMode: _selection.active,
                           selected: _selection.contains(item),
-                          onEdit: () => _handleTap(item),
+                          onOpen: () => _handleTap(item),
+                          // 同首页：菜单里的「编辑」直接开编辑器。
+                          onEdit: () => widget.onEdit(item),
                           onLongPress: () =>
                               setState(() => _selection.select(item)),
                           onDelete: () => widget.onDelete(item),
@@ -1219,7 +1259,8 @@ class _ImportantDaysPageState extends State<ImportantDaysPage> {
                           occurrence: item,
                           selectionMode: _selection.active,
                           selected: _selection.contains(item),
-                          onEdit: () => _handleTap(item),
+                          onOpen: () => _handleTap(item),
+                          onEdit: () => widget.onEdit(item),
                           onLongPress: () =>
                               setState(() => _selection.select(item)),
                           onDelete: () => widget.onDelete(item),
@@ -1292,12 +1333,20 @@ class _ImportantDaysPageState extends State<ImportantDaysPage> {
     });
   }
 
+  /// 点条目：进详情页；没提供 [ImportantDaysPage.onOpen] 时退回直接编辑。
+  ///
+  /// 多选模式下点条目是切换选中，不是打开详情，所以先判选中再谈跳转。
   void _handleTap(EventOccurrence item) {
     if (_selection.active) {
       setState(() => _selection.toggle(item));
       return;
     }
-    widget.onEdit(item);
+    final open = widget.onOpen;
+    if (open == null) {
+      widget.onEdit(item);
+      return;
+    }
+    open(item);
   }
 
   Future<void> _batchCategory() async {

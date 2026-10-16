@@ -3,6 +3,7 @@ import 'package:lunar/lunar.dart';
 import '../models/countdown_event.dart';
 import 'rust_date_core.dart';
 
+/// 一条重要日在列表里的一次出现。
 class EventOccurrence {
   const EventOccurrence({
     required this.title,
@@ -13,6 +14,7 @@ class EventOccurrence {
     this.origin,
     this.overridden = false,
     this.reminderDays = -1,
+    this.reminderHour = 9,
   });
 
   final String title;
@@ -30,8 +32,18 @@ class EventOccurrence {
   /// -1 表示不提醒。
   final int reminderDays;
 
+  /// 提醒当天的几点（0..23）；只在 [reminderDays] >= 0 时有意义。
+  ///
+  /// 必须由构造方填进来，不能在这里按 [reminderDays] 现推一个默认 9 点：内置条目
+  /// 的时刻存在 [DayOverride.reminderHour] 里（用户改动过就是 21 点），而这里的
+  /// [event] 为 null —— 现推出来的 9 点会与真正会响的那一刻对不上。
+  final int reminderHour;
+
   /// 是否可以改动：自己的记录，或内置条目。
   bool get editable => event != null || origin != null;
+
+  /// 备注全文；内置条目为空（用户没改过它的备注）。
+  String get note => event?.note ?? '';
 }
 
 /// 某一次发生相对事件「最初那一天」已经过去了多少。
@@ -62,6 +74,24 @@ class EventMilestone {
   /// 公历重复按公历年算，农历重复按农历年算。一次性事件只有一次发生，
   /// 却谈不上「第几次」，同样为 null。
   final int? cycleCount;
+}
+
+/// 时间线上的一次发生。
+///
+/// [DateTime] 本身只表达「哪一天」，[milestone] 补上从事件最初那一天算起已过
+/// 多少天、第几周年。两者分开是因为详情页与列表页要的粒度不同：列表页只要
+/// 一句摘要，详情页要拆开逐项摆出来。
+class OccurrenceMoment {
+  const OccurrenceMoment({required this.date, this.milestone});
+
+  final DateTime date;
+  final EventMilestone? milestone;
+
+  /// 相对今天还有多少天。往期为负，未来为正。
+  int daysFrom(DateTime today) => CalendarEngine.daysBetween(today, date);
+
+  /// 已经发生过没有。
+  bool isPast(DateTime today) => daysFrom(today) < 0;
 }
 
 class CalendarEngine {
@@ -109,6 +139,92 @@ class CalendarEngine {
       if (names.isNotEmpty) found[date] = names;
     }
     return Map.unmodifiable(found);
+  }
+
+  /// 某一次发生之前 [past] 次、之后 [future] 次发生，按日期升序返回。
+  ///
+  /// [around] 应当是 [occurrences] 给出的真实发生日。详情页的往期回看要用它，
+  /// 而 [occurrences] 只从 [from] 往后找 —— 单靠它拿不到「上一次是哪天」。
+  ///
+  /// 返回值不可修改。
+  static List<DateTime> historyOccurrences(
+    CountdownEvent event,
+    DateTime around, {
+    int past = 3,
+    int future = 3,
+  }) {
+    final target = dateOnly(around);
+    final found = <DateTime>{};
+
+    if (event.recurrence == EventRecurrence.once) {
+      // 一次性事件只有一天：目标就是它本身，往期与未来都空着。
+      return List<DateTime>.unmodifiable([dateOnly(event.date)]);
+    }
+
+    // 逐年扫：公历重复与农历重复都是一年最多一次，所以按「目标年前 span 年到
+    // 目标年后 future 年」扫一圈就够了，不用先拿 occurrences() 再倒推。
+    // 多扫一截（span + 1）是为了兜住闰月缺失的年份 —— 少算一年会让时间线凭空
+    // 少一格，sublist 那边本来就会按实际条数夹取，多扫不算浪费。
+    final span = past + future;
+    for (var offset = -span - 1; offset <= future; offset++) {
+      final date = _occurrenceInYear(event, target.year + offset);
+      if (date != null) found.add(date);
+    }
+
+    final ordered = found.toList()..sort();
+    if (!ordered.contains(target)) {
+      // 目标本身不落在任何一年（农历当年没有这个日子，例如闰月被跳过）。
+      // 这时不要硬把围绕日塞进时间线：那一行算不出周年，说服不了任何人。
+      return List<DateTime>.unmodifiable(ordered);
+    }
+    final index = ordered.indexOf(target);
+    final start = (index - past).clamp(0, index);
+    final end = (index + future + 1).clamp(index + 1, ordered.length);
+    return List<DateTime>.unmodifiable(ordered.sublist(start, end));
+  }
+
+  /// [event] 在 [around] 那一次前后的发生序列，每一项都带上里程碑。
+  ///
+  /// 内置条目（官方假期、传统节日）没有 [CountdownEvent]，也就没有「最初那一天」
+  /// 可依，[around] 就是全部 —— 详情页据此只显示一条，不画时间线。
+  ///
+  /// 返回值不可修改。
+  static List<OccurrenceMoment> historyMoments(
+    CountdownEvent? event,
+    DateTime around, {
+    int past = 3,
+    int future = 3,
+  }) {
+    final target = dateOnly(around);
+    if (event == null) {
+      // 内置条目没有「最初那一天」，也就无从算起已过多少天、第几周年。
+      // milestone 留 null，界面据此隐藏那几项，而不是编一个数字出来。
+      return List<OccurrenceMoment>.unmodifiable([
+        OccurrenceMoment(date: target),
+      ]);
+    }
+    return List<OccurrenceMoment>.unmodifiable([
+      for (final date in historyOccurrences(event, target, past: past, future: future))
+        OccurrenceMoment(
+          date: date,
+          milestone: milestoneFor(event, date),
+        ),
+    ]);
+  }
+
+  /// [event] 在 [year] 年的发生日；当年没有（农历闰月缺失等）返回 null。
+  ///
+  /// 与 [occurrences] 共用同一套月末夹取与农历三十兜底，两边算出来的必须是
+  /// 同一天 —— 时间线上出现一个列表里没有的日子，比少一次更让人困惑。
+  static DateTime? _occurrenceInYear(CountdownEvent event, int year) {
+    if (event.recurrence == EventRecurrence.solarYearly) {
+      final lastDay = DateTime(year, event.date.month + 1, 0).day;
+      final day = event.date.day > lastDay ? lastDay : event.date.day;
+      return DateTime(year, event.date.month, day);
+    }
+    final month = event.lunarMonth ?? Lunar.fromDate(event.date).getMonth();
+    final day = event.lunarDay ?? Lunar.fromDate(event.date).getDay();
+    return lunarDate(year, month, day);
   }
 
   static DateTime? lunarDate(int year, int month, int day) {
@@ -202,6 +318,7 @@ class CalendarEngine {
       event: event,
       subtitle: event.category,
       reminderDays: event.reminderDays,
+      reminderHour: event.reminderHour,
     );
   }
 
@@ -344,6 +461,19 @@ class CalendarEngine {
       [milestoneElapsedLabel(milestone), milestoneAnniversaryLabel(milestone)]
           .where((part) => part.isNotEmpty)
           .join(' · ');
+
+  /// 列表里某一条的里程碑摘要；算不出来时返回 null，调用方据此整行隐藏。
+  ///
+  /// 首页大卡片、列表条目与详情页共用这一个入口：三处都要「算不出就不显示」的
+  /// 同一口径，各写一份迟早会算出三种不一样的结果。
+  static String? milestoneTextOf(EventOccurrence item) {
+    final event = item.event;
+    if (event == null) return null;
+    final milestone = milestoneFor(event, item.date);
+    if (milestone == null) return null;
+    final text = milestoneSummary(milestone);
+    return text.isEmpty ? null : text;
+  }
 
   /// 从 [origin] 到 [target] 之间走过的整年数（公历）。
   ///
