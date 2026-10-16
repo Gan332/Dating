@@ -228,16 +228,18 @@ jobs:
             fi
             echo "== $name"
             printf '%s\n' "$out" | head -n 12
-            digest="$(printf '%s\n' "$out" \
-              | grep -ioE 'sha-?256[^0-9a-f]*[0-9a-f]{64}' \
-              | grep -ioE '[0-9a-f]{64}' | head -n1 | tr 'A-F' 'a-f')"
-            dn="$(printf '%s\n' "$out" | grep -i 'certificate dn' | head -n1 | sed 's/^ *//')"
+            # apksigner 打印的是 "V2 Signer: certificate SHA-256 digest: 8dd8…"，
+            # 所以按行取最后一个字段。别写成「SHA-256 后面跟 64 位十六进制」那种正则：
+            # digest 这个词本身就含十六进制字符（d、e），会把匹配吃掉、解析出空值。
+            digest="$(printf '%s\n' "$out" | awk '/SHA-256/{print $NF}' | head -n1 | tr 'A-F' 'a-f')"
+            dn="$(printf '%s\n' "$out" | grep -i 'certificate DN' | head -n1 | sed 's/^ *//')"
             {
               echo "- **${name}**：${dn:-证书 DN 解析不出}"
               echo "  - SHA-256 \`${digest:-解析不出}\`"
             } >> "$GITHUB_STEP_SUMMARY"
             if [ "$signed_with_release" = "true" ] && [ "$digest" != "$EXPECTED_SHA256" ]; then
-              echo "::error::$name 的签名指纹不是发布证书（实际 '${digest:-空}'），检查 DAYMARK_KEYSTORE_BASE64 与 key.properties"
+              echo "::error::$name 的签名指纹不是发布证书（解析到 '${digest:-空}'）"
+              printf '%s\n' "$out" | head -n 12
               status=1
             fi
           done
