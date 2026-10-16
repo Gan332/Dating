@@ -86,7 +86,7 @@ flutter build appbundle --release --target-platform android-arm,android-arm64
 - Android：`namespace`/`applicationId` = `com.example.daymark`，`minSdk 23`、`compileSdk`/`targetSdk 36`、AGP 8.11.1、Kotlin 2.2.20、`multiDexEnabled`、core library desugaring。release 当前用 **debug 密钥**签名（仓库无 `android/key.properties`），发布前必须替换。
 - `android/build.gradle.kts` 把 `buildDirectory` 重定向到仓库根 `build/`，因为 Flutter 固定去 `build/app/outputs/flutter-apk/` 找 APK。改 Gradle 路径时别动这条。
 - `android/app/build.gradle.kts` 注册 `buildRustAndroid`（`Exec`）：`workingDir` 必须是 `rust/`（cargo-ndk 靠当前目录找 `Cargo.toml`），`cargo ndk -t … -o android/app/src/main/jniLibs build --release`，`doLast` 校验 `.so` 真的生成；`preBuild` 与 `merge*JniLibFolders` 依赖它。`splits.abi` 仅在非 bundle 任务启用（AGP 不允许 AAB 同时拆包）。
-- CI：`.github/workflows/build-apk.yml`，`ubuntu-26.04`，JDK 17 + Flutter stable + Rust（aarch64/armv7/x86_64 Android target），先 `flutter analyze`、`flutter test` 再出包，APK/AAB 产物保留 30 天。
+- CI：`.github/workflows/build-apk.yml`，`ubuntu-26.04`，JDK 17 + Flutter stable + Rust（aarch64/armv7/x86_64 Android target），APK/AAB 产物保留 30 天。**步骤顺序是「先验证、后打包」，别把 Android 工具链挪回前面**：`flutter pub get` → `cargo test` → `flutter analyze` → `flutter test` 全部排在 precache / cargo-ndk / NDK / Gradle wrapper 之前。runner 镜像换版曾让 `sdkmanager` 掉出 PATH，NDK 安装一挂（exit 127），后面的 analyze 与 test 一步都轮不到跑，回归报告整个丢掉。NDK 步骤会自己找 SDK（`ANDROID_HOME` → `ANDROID_SDK_ROOT` → `flutter doctor` 报告的路径 → 常见路径）与 sdkmanager（PATH → `cmdline-tools/*/bin` → `tools/bin`），实在找不到就带 `::error::` 与目录清单明确失败。
 
 ## Code Conventions & Common Patterns
 
