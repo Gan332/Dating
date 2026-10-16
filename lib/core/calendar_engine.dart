@@ -15,7 +15,28 @@ class EventOccurrence {
     this.overridden = false,
     this.reminderDays = -1,
     this.reminderHour = 9,
+    this.coverPath,
   });
+
+  /// 从一条自带记录派生列表条目：记录上有的字段都在这一处搬过来。
+  ///
+  /// 加字段时只改这里就够了。[reminderHour] 与 [coverPath] 都是记录上早就有、
+  /// 条目上却漏搬过的字段，两次都是靠人眼发现界面上缺一块。
+  factory EventOccurrence.fromEvent(
+    CountdownEvent event, {
+    required DateTime date,
+    required int daysRemaining,
+  }) =>
+      EventOccurrence(
+        title: event.title,
+        date: date,
+        daysRemaining: daysRemaining,
+        event: event,
+        subtitle: event.category,
+        reminderDays: event.reminderDays,
+        reminderHour: event.reminderHour,
+        coverPath: event.coverPath,
+      );
 
   final String title;
   final DateTime date;
@@ -44,6 +65,12 @@ class EventOccurrence {
 
   /// 备注全文；内置条目为空（用户没改过它的备注）。
   String get note => event?.note ?? '';
+
+  /// 封面图文件名（不含路径）；为空表示没有封面。
+  ///
+  /// 与 [CountdownEvent.coverPath] 同义。内置条目也能有封面，所以这里不能只读
+  /// [event] —— 内置条目的封面存在改动记录里，由构造方搬进来。
+  final String? coverPath;
 }
 
 /// 某一次发生相对事件「最初那一天」已经过去了多少。
@@ -311,14 +338,10 @@ class CalendarEngine {
     final dates = occurrences(event, today, limit: 1);
     if (dates.isEmpty) return null;
     final date = dates.first;
-    return EventOccurrence(
-      title: event.title,
+    return EventOccurrence.fromEvent(
+      event,
       date: date,
       daysRemaining: daysBetween(today, date),
-      event: event,
-      subtitle: event.category,
-      reminderDays: event.reminderDays,
-      reminderHour: event.reminderHour,
     );
   }
 
