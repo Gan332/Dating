@@ -200,7 +200,7 @@ class AppController extends ChangeNotifier {
     // 那不是用户想找的东西。自带记录仍按标题 + 备注搜，两边口径就此不同。
     final builtIn = builtInOccurrences(start, days: days).where(
       (item) =>
-          (category == null || _categoryOf(item) == category) &&
+          (category == null || categoryOf(item) == category) &&
           (keyword.isEmpty || item.title.toLowerCase().contains(keyword)),
     );
 
@@ -212,9 +212,13 @@ class AppController extends ChangeNotifier {
     return List<EventOccurrence>.unmodifiable(all);
   }
 
-  /// 内置条目的归类：被改动过按改动的分类算，否则算「重要日」——
-  /// 与 [CountdownEvent.category] 的默认值保持一致。
-  String _categoryOf(EventOccurrence item) {
+  /// 一条列表条目算哪个分类：自己的记录按记录上的分类算，内置条目按改动记录算，
+  /// 没改动过就算「重要日」——与 [CountdownEvent.category] 的默认值保持一致。
+  ///
+  /// 公开出来是给分类筛选与「按分类排序」共用：内置条目的分类不在
+  /// [EventOccurrence.subtitle] 里（那是「2026 官方假期」这类来源说明），
+  /// 页面这一层推不出来，只能问控制器。
+  String categoryOf(EventOccurrence item) {
     final origin = item.origin;
     if (origin == null) return item.event?.category ?? '重要日';
     return _overrides[origin]?.category ?? '重要日';
@@ -646,6 +650,23 @@ class AppController extends ChangeNotifier {
       await _withTimeout(_reminders.cancelAll(), '取消提醒');
     }
     return true;
+  }
+
+  /// 系统是否允许精确提醒。
+  ///
+  /// 只用来显示状态：不允许时提醒照常安排，只是可能比设定时刻晚一些，
+  /// 所以既不拦操作、也不报错。[ReminderScheduler] 之外的能力，假实现不提供。
+  Future<bool> canScheduleExactly() async {
+    final reminders = _reminders;
+    if (reminders is! ExactAlarmSupport) return false;
+    return reminders.canScheduleExactly();
+  }
+
+  /// 跳到系统的「闹钟和提醒」授权页；返回是否已经拿到权限。
+  Future<bool> requestExactReminders() async {
+    final reminders = _reminders;
+    if (reminders is! ExactAlarmSupport) return false;
+    return reminders.requestExactAlarmsPermission();
   }
 
   // -------------------------------------------------------- 备份与恢复

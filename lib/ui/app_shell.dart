@@ -7,6 +7,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../app_controller.dart';
 import '../core/calendar_engine.dart';
+import '../core/occurrence_sort.dart';
 import '../data/event_store.dart';
 import '../data/holiday_catalog.dart';
 import '../models/app_settings.dart';
@@ -1101,20 +1102,23 @@ class _ImportantDaysPageState extends State<ImportantDaysPage> {
             .map((event) => CalendarEngine.nextOccurrence(event, today))
             .whereType<EventOccurrence>()
             .toList();
-    final upcoming = occurrences
-        .where((item) => item.daysRemaining >= 0)
-        .toList()
-      ..sort((a, b) {
-        final byDate = a.daysRemaining.compareTo(b.daysRemaining);
-        return byDate != 0 ? byDate : a.title.compareTo(b.title);
-      });
-    final past = occurrences
-        .where((item) => item.daysRemaining < 0)
-        .toList()
-      ..sort((a, b) {
-        final byDate = b.daysRemaining.compareTo(a.daysRemaining);
-        return byDate != 0 ? byDate : a.title.compareTo(b.title);
-      });
+    // 分组是结构（「即将到来」与「已经走过」），排序只决定每组内部的顺序。
+    // 默认的「按剩余天数」在两组里方向相反：上面最近的在最前，下面最近发生的
+    // 也在最前——那一段的剩余天数是负数，-1 比 -300 近。
+    final sortMode = controller.settings.sortMode;
+    final upcoming = sortOccurrences(
+      occurrences.where((item) => item.daysRemaining >= 0).toList(),
+      sortMode,
+      categoryOf: controller.categoryOf,
+      categoryOrder: categories,
+    );
+    final past = sortOccurrences(
+      occurrences.where((item) => item.daysRemaining < 0).toList(),
+      sortMode,
+      categoryOf: controller.categoryOf,
+      categoryOrder: categories,
+      mostRecentFirst: true,
+    );
     _visible = [...upcoming, ...past];
 
             return RefreshIndicator(
@@ -1159,6 +1163,13 @@ class _ImportantDaysPageState extends State<ImportantDaysPage> {
                       avatar: const Icon(Icons.history_rounded, size: 17),
                       label: Text('已过去 ${past.length}'),
                     ),
+                  // 排序入口排在计数旁边：它回答的是「这一页怎么摆」，与计数同属
+                  // 页头信息，单独占一行只会把列表往下推。
+                  ActionChip(
+                    avatar: const Icon(Icons.sort_rounded, size: 17),
+                    label: Text('排序：${sortMode.label}'),
+                    onPressed: _pickSortMode,
+                  ),
                 ],
               ),
               const SizedBox(height: 12),
@@ -1331,6 +1342,56 @@ class _ImportantDaysPageState extends State<ImportantDaysPage> {
       _term = '';
       _category = null;
     });
+  }
+
+  /// 选择这一页的排序方式。
+  ///
+  /// 只影响「重要日」页：首页固定按剩余天数，换掉它首页就不再是「最近要发生什么」
+  /// 那个仪表盘了。选完立刻落设置，于是这一步和别的设置一样能撤销。
+  Future<void> _pickSortMode() async {
+    final current = widget.controller.settings.sortMode;
+    final picked = await showModalBottomSheet<AppSortMode>(
+      context: context,
+      useSafeArea: true,
+      builder: (context) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 16),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 22),
+              child: Text(
+                '排序方式',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          for (final mode in AppSortMode.values)
+            ListTile(
+              leading: Icon(
+                mode == current
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_unchecked,
+                color: mode == current
+                    ? Theme.of(context).colorScheme.primary
+                    : null,
+              ),
+              title: Text(mode.label),
+              onTap: () => Navigator.pop(context, mode),
+            ),
+          const SizedBox(height: 12),
+        ],
+      ),
+    );
+    if (picked == null || picked == current) return;
+    await widget.onMutate(
+      () => widget.controller.updateSettings(
+        widget.controller.settings.copyWith(sortMode: picked),
+      ),
+      '排序改为「${picked.label}」',
+    );
   }
 
   /// 点条目：进详情页；没提供 [ImportantDaysPage.onOpen] 时退回直接编辑。
@@ -1732,6 +1793,73 @@ class _DetailPill extends StatelessWidget {
       );
 }
 
+/// 「提醒准不准时」的状态行。
+///
+/// 精确闹钟是系统权限（Android 12+ 默认不给），改了之后系统不一定通知应用，
+/// 所以从授权页回来时自己再查一次，而不是指望控制器发通知。
+class _ReminderAccuracyTile extends StatefulWidget {
+  const _ReminderAccuracyTile({required this.controller});
+
+  final AppController controller;
+
+  @override
+  State<_ReminderAccuracyTile> createState() => _ReminderAccuracyTileState();
+}
+
+class _ReminderAccuracyTileState extends State<_ReminderAccuracyTile> {
+  /// 还没查出来时为 null：那一瞬不显示这一行，免得先闪一句错的。
+  bool? _exact;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    final exact = await widget.controller.canScheduleExactly();
+    if (!mounted) return;
+    setState(() => _exact = exact);
+  }
+
+  Future<void> _request() async {
+    final granted = await widget.controller.requestExactReminders();
+    if (!mounted) return;
+    setState(() => _exact = granted);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          granted ? '已允许精确提醒，之后的提醒会准时送达。' : '还没允许精确提醒，通知可能晚一些。',
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final exact = _exact;
+    if (exact == null) return const SizedBox.shrink();
+    if (exact) {
+      return const ListTile(
+        contentPadding: EdgeInsets.symmetric(horizontal: 18, vertical: 4),
+        leading: Icon(Icons.alarm_on_rounded),
+        title: Text('提醒时刻精确'),
+        subtitle: Text('系统已允许在设定时刻准时提醒'),
+      );
+    }
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
+      leading: const Icon(Icons.alarm_off_rounded),
+      title: const Text('系统未允许精确提醒'),
+      subtitle: const Text('通知可能比设定时刻晚一些，允许后更准'),
+      trailing: FilledButton.tonal(
+        onPressed: _request,
+        child: const Text('去授权'),
+      ),
+    );
+  }
+}
+
 class SettingsPage extends StatelessWidget {
   const SettingsPage({
     super.key,
@@ -1755,23 +1883,36 @@ class SettingsPage extends StatelessWidget {
             elevation: 0,
             color: Theme.of(context).colorScheme.surfaceContainerLow,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-            child: ListTile(
-              contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
-              leading: const Icon(Icons.notifications_active_outlined),
-              title: const Text('本地提醒'),
-              subtitle: const Text('默认关闭 · 时刻可逐条设置 · 不需要网络'),
-              trailing: M3ESwitch(
-                value: controller.remindersEnabled,
-                onChanged: (value) async {
-                  final enabled = await controller.setRemindersEnabled(value);
-                  if (!context.mounted) return;
-                  if (!enabled) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('请在系统设置中允许通知后重试。')),
-                    );
-                  }
-                },
-              ),
+            child: Column(
+              children: [
+                ListTile(
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                  leading: const Icon(Icons.notifications_active_outlined),
+                  title: const Text('本地提醒'),
+                  subtitle: const Text('默认关闭 · 时刻可逐条设置 · 不需要网络'),
+                  trailing: M3ESwitch(
+                    value: controller.remindersEnabled,
+                    onChanged: (value) async {
+                      final enabled =
+                          await controller.setRemindersEnabled(value);
+                      if (!context.mounted) return;
+                      if (!enabled) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('请在系统设置中允许通知后重试。'),
+                          ),
+                        );
+                      }
+                    },
+                  ),
+                ),
+                // 只有开着提醒时才谈准不准，否则这一行只是噪音。
+                if (controller.remindersEnabled) ...[
+                  const Divider(height: 1, indent: 56),
+                  _ReminderAccuracyTile(controller: controller),
+                ],
+              ],
             ),
           ),
           _undoCard(context),
