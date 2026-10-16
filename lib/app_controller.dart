@@ -81,6 +81,12 @@ class AppController extends ChangeNotifier {
   String _holidaySource = '';
   DateTime? _holidayFetchedAt;
 
+  /// 封面图的存取通道。
+  ///
+  /// 编辑器用它把用户选的图落盘（拿到文件名后再随记录落库），详情页用按文件名
+  /// 把图取回来显示。对外只给文件名，绝对路径永远不离开这一层。
+  CoverStore get coverStore => _covers;
+
   List<CountdownEvent> get events => _events;
 
   /// 用户可用的分类清单，顺序即界面上的展示顺序。
