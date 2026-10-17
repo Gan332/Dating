@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import 'core/calendar_engine.dart';
 import 'data/backup_file_gateway.dart';
+import 'data/cover_picker.dart';
 import 'data/cover_store.dart';
 import 'data/event_store.dart';
 import 'data/holiday_catalog.dart';
@@ -41,13 +42,15 @@ class AppController extends ChangeNotifier {
     HolidayRepository? holidays,
     BackupFileGateway? backupFiles,
     CoverStore? covers,
+    CoverPicker? coverPicker,
     this.timeout = stepTimeout,
   })  : _store = store ?? EventStore(),
         _reminders = reminders ?? ReminderService.instance,
         _settingsStore = settingsStore ?? SettingsStore(),
         _holidays = holidays ?? HolidayRepository(),
         _backupFiles = backupFiles ?? PluginBackupFileGateway(),
-        _covers = covers ?? FileCoverStore();
+        _covers = covers ?? FileCoverStore(),
+        _coverPicker = coverPicker ?? PluginCoverPicker();
 
   /// 单个启动步骤的上限。插件通道或文件系统一旦无响应，也要让界面出来，
   /// 而不是让用户对着启动转圈无限等待。
@@ -67,6 +70,10 @@ class AppController extends ChangeNotifier {
 
   /// 封面图的存取通道。目录与时钟都可注入，测试用临时目录，真机走 path_provider。
   final CoverStore _covers;
+
+  /// 封面选择通道。插件调用收在 [PluginCoverPicker] 里，测试注入假实现即可，
+  /// 与 `BackupFileGateway` 同一个套路。
+  final CoverPicker _coverPicker;
 
   List<CountdownEvent> _events = const [];
   final Map<String, DayOverride> _overrides = {};
@@ -691,6 +698,20 @@ class AppController extends ChangeNotifier {
   /// 跳到系统的「闹钟和提醒」授权页；返回是否已经拿到权限。
   Future<bool> requestExactReminders() =>
       _reminders.requestExactAlarmsPermission();
+
+  // ---------------------------------------------------------------- 封面
+
+  /// 弹系统图片选择器，把用户挑中的图复制进私有目录，返回封面文件名。
+  ///
+  /// 返回 `null` 表示用户取消，不是错误。选择或复制失败时异常消息可直接展示
+  /// （[CoverPickException] / [CoverStoreException] 的 `toString` 就是中文提示）。
+  /// 刻意不套 [_withTimeout]：选择器开着的时候由用户慢慢挑，固定上限只会把
+  /// 正常挑选误判成失败；复制发生在点下确定之后，是本地文件操作，不超时也罢。
+  Future<String?> pickCover(String id) async {
+    final source = await _coverPicker.pickImagePath();
+    if (source == null) return null;
+    return _covers.save(id, source);
+  }
 
   // -------------------------------------------------------- 备份与恢复
 

@@ -41,6 +41,8 @@ class _AppShellState extends State<AppShell> {
       builder: (_) => EventEditor(
         event: event,
         categories: categoriesOf(widget.controller),
+        coverStore: widget.controller.coverStore,
+        onPickCover: widget.controller.pickCover,
       ),
     );
     if (result == null) return;
@@ -101,6 +103,8 @@ class _AppShellState extends State<AppShell> {
       builder: (_) => EventEditor(
         event: event,
         categories: categoriesOf(widget.controller),
+        coverStore: widget.controller.coverStore,
+        onPickCover: widget.controller.pickCover,
       ),
     );
     if (result == null) return;
@@ -151,6 +155,10 @@ class _AppShellState extends State<AppShell> {
         // 已改过的条目要接着显示它原本的分类，而不是每次都退回「重要日」。
         savedCategory: widget.controller.overrideFor(origin)?.category ??
             '重要日',
+        // 封面同理：接着显示已经设过的那张，不然改个名字就会把它丢掉。
+        savedCoverPath: widget.controller.overrideFor(origin)?.coverPath,
+        coverStore: widget.controller.coverStore,
+        onPickCover: widget.controller.pickCover,
       ),
     );
     if (result == null) return;

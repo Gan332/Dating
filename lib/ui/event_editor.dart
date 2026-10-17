@@ -5,7 +5,9 @@ import 'package:lunar/lunar.dart';
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../data/cover_store.dart';
 import '../models/countdown_event.dart';
+import 'cover_field.dart';
 
 /// 提醒提前量选项。[days] 与数据库里的 `reminderDays` 一一对应，-1 表示关闭。
 ///
@@ -46,7 +48,13 @@ List<String> categoryChoices(List<String>? given, String? current) {
 }
 
 class EventEditor extends StatefulWidget {
-  const EventEditor({super.key, this.event, this.categories});
+  const EventEditor({
+    super.key,
+    this.event,
+    this.categories,
+    this.coverStore,
+    this.onPickCover,
+  });
 
   final CountdownEvent? event;
 
@@ -57,6 +65,12 @@ class EventEditor extends StatefulWidget {
   /// 单独跑。留空时回落到 [kEventCategories]。
   final List<String>? categories;
 
+  /// 封面存取通道与选图回调，由界面层从 [AppController] 转交。
+  ///
+  /// 两者缺一就不显示封面区块：编辑器单测、以后别处复用时不强求接上相册。
+  final CoverStore? coverStore;
+  final CoverPickCallback? onPickCover;
+
   @override
   State<EventEditor> createState() => _EventEditorState();
 }
@@ -66,6 +80,7 @@ class _EventEditorState extends State<EventEditor> {
   late final TextEditingController _titleController;
   late final TextEditingController _noteController;
   late final TextEditingController _customLeadController;
+  late final String _id;
   late DateTime _date;
   late EventRecurrence _recurrence;
   late String _category;
@@ -73,10 +88,20 @@ class _EventEditorState extends State<EventEditor> {
   late int _reminderHour;
   late bool _leapMonth;
 
+  /// 当前表单上的封面文件名；`null` 表示这条记录没有封面。
+  ///
+  /// 选了图、点了移除都只改这里，跟「保存」一起提交。旧图不在这里删——撤销
+  /// 要把记录连同封面一起还回来，文件留给启动清理处置（见 `CoverField` 注释）。
+  late String? _coverPath;
+
   @override
   void initState() {
     super.initState();
     final event = widget.event;
+    // 新建的记录也在打开编辑器时先定下 id：选封面要用它给文件命名，保存时
+    // 再用同一个 id 落库，封面文件的归属才对得上。
+    _id = event?.id ?? _generateId();
+    _coverPath = event?.coverPath;
     _titleController = TextEditingController(text: event?.title ?? '');
     _noteController = TextEditingController(text: event?.note ?? '');
     _date = event?.date ?? DateTime.now();
@@ -108,6 +133,8 @@ class _EventEditorState extends State<EventEditor> {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final lunar = Lunar.fromDate(_date);
+    final coverStore = widget.coverStore;
+    final onPickCover = widget.onPickCover;
     return Container(
       decoration: BoxDecoration(
         color: colors.surface,
@@ -205,14 +232,19 @@ class _EventEditorState extends State<EventEditor> {
                 ),
                 if (_recurrence == EventRecurrence.lunarYearly) ...[
                   const SizedBox(height: 8),
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('按指定闰月重复'),
-                    subtitle: Text('农历${lunar.getMonthInChinese()}'
-                        '${lunar.getDayInChinese()}；指定闰月当年缺失时跳过'),
-                    trailing: M3ESwitch(
-                      value: _leapMonth,
-                      onChanged: (value) => setState(() => _leapMonth = value),
+                  // 同改动面板：面板根是带背景的 DecoratedBox，ListTile 的墨水
+                  // 会被它盖住并触发 debug 断言，包一层透明 Material 安置墨水。
+                  Material(
+                    type: MaterialType.transparency,
+                    child: ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('按指定闰月重复'),
+                      subtitle: Text('农历${lunar.getMonthInChinese()}'
+                          '${lunar.getDayInChinese()}；指定闰月当年缺失时跳过'),
+                      trailing: M3ESwitch(
+                        value: _leapMonth,
+                        onChanged: (value) => setState(() => _leapMonth = value),
+                      ),
                     ),
                   ),
                   Text(
@@ -337,6 +369,17 @@ class _EventEditorState extends State<EventEditor> {
                     border: OutlineInputBorder(),
                   ),
                 ),
+                // 封面是可选装饰，和备注一样摆在表单后半段；挑了图也只是
+                // 改表单状态，跟着「保存」一起提交。
+                if (coverStore != null && onPickCover != null) ...[
+                  const SizedBox(height: 16),
+                  CoverField(
+                    store: coverStore,
+                    filename: _coverPath,
+                    onPick: () => onPickCover(_id),
+                    onChanged: (name) => setState(() => _coverPath = name),
+                  ),
+                ],
                 const SizedBox(height: 10),
                 SizedBox(
                   width: double.infinity,
@@ -382,9 +425,7 @@ class _EventEditorState extends State<EventEditor> {
     if (_leapMonth) lunarMonth = -lunarMonth;
     final existing = widget.event;
     final event = CountdownEvent(
-      id: existing?.id ??
-          '${DateTime.now().microsecondsSinceEpoch}-'
-          '${Random.secure().nextInt(1000000)}',
+      id: _id,
       title: _titleController.text.trim(),
       date: DateTime(_date.year, _date.month, _date.day),
       recurrence: _recurrence,
@@ -397,8 +438,13 @@ class _EventEditorState extends State<EventEditor> {
       // 编辑已有记录时把创建时间原样带过去：0 意味着「未知」，落库时会补成保存那一刻，
       // 那会让一条 2019 年的记录看起来像今天才建的，按创建时间排序时直接跳到最前。
       createdAt: existing?.createdAt ?? 0,
-      coverPath: existing?.coverPath,
+      // 封面用的是表单里当前那一张：换了就是新图，移除过就是 null。
+      coverPath: _coverPath,
     );
     Navigator.pop(context, event);
   }
+
+  /// 新建记录的 id：时间戳 + 随机数，撞不上也不带任何用户信息。
+  static String _generateId() =>
+      '${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1000000)}';
 }
