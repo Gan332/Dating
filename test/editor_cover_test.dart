@@ -48,7 +48,10 @@ Widget _host(Widget child) => M3EMaterialApp(
 CountdownEvent? savedEvent;
 DayOverrideResult? savedOverride;
 
-/// 把编辑器 push 出来，模拟界面层真实的调用方式（返回值从路由弹出）。
+/// 把编辑器弹出来，参数与 app_shell 里的真实调用一致。
+///
+/// 不能用 `MaterialPageRoute`：编辑器自己不是 Scaffold，Material 祖先由
+/// bottom sheet 提供，换成整页路由会直接撞上「No Material widget found」。
 Future<void> _openEventEditor(
   WidgetTester tester, {
   CountdownEvent? event,
@@ -60,13 +63,15 @@ Future<void> _openEventEditor(
       Builder(
         builder: (context) => FilledButton(
           onPressed: () async {
-            savedEvent = await Navigator.of(context).push<CountdownEvent>(
-              MaterialPageRoute<CountdownEvent>(
-                builder: (_) => EventEditor(
-                  event: event,
-                  coverStore: const _FakeCoverStore(),
-                  onPickCover: pick ?? (_) async => null,
-                ),
+            savedEvent = await showModalBottomSheet<CountdownEvent>(
+              context: context,
+              isScrollControlled: true,
+              useSafeArea: true,
+              backgroundColor: Colors.transparent,
+              builder: (_) => EventEditor(
+                event: event,
+                coverStore: const _FakeCoverStore(),
+                onPickCover: pick ?? (_) async => null,
               ),
             );
           },
@@ -92,18 +97,20 @@ Future<void> _openOverrideEditor(
       Builder(
         builder: (context) => FilledButton(
           onPressed: () async {
-            savedOverride = await Navigator.of(context).push<DayOverrideResult>(
-              MaterialPageRoute<DayOverrideResult>(
-                builder: (_) => DayOverrideEditor(
-                  origin: _springOrigin,
-                  title: '春节',
-                  date: DateTime(2026, 2, 17),
-                  subtitle: '2026 官方假期',
-                  overridden: savedCoverPath != null,
-                  savedCoverPath: savedCoverPath,
-                  coverStore: const _FakeCoverStore(),
-                  onPickCover: pick ?? (_) async => null,
-                ),
+            savedOverride = await showModalBottomSheet<DayOverrideResult>(
+              context: context,
+              isScrollControlled: true,
+              useSafeArea: true,
+              backgroundColor: Colors.transparent,
+              builder: (_) => DayOverrideEditor(
+                origin: _springOrigin,
+                title: '春节',
+                date: DateTime(2026, 2, 17),
+                subtitle: '2026 官方假期',
+                overridden: savedCoverPath != null,
+                savedCoverPath: savedCoverPath,
+                coverStore: const _FakeCoverStore(),
+                onPickCover: pick ?? (_) async => null,
               ),
             );
           },
