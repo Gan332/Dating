@@ -232,14 +232,19 @@ class _EventEditorState extends State<EventEditor> {
                 ),
                 if (_recurrence == EventRecurrence.lunarYearly) ...[
                   const SizedBox(height: 8),
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('按指定闰月重复'),
-                    subtitle: Text('农历${lunar.getMonthInChinese()}'
-                        '${lunar.getDayInChinese()}；指定闰月当年缺失时跳过'),
-                    trailing: M3ESwitch(
-                      value: _leapMonth,
-                      onChanged: (value) => setState(() => _leapMonth = value),
+                  // 同改动面板：面板根是带背景的 DecoratedBox，ListTile 的墨水
+                  // 会被它盖住并触发 debug 断言，包一层透明 Material 安置墨水。
+                  Material(
+                    type: MaterialType.transparency,
+                    child: ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('按指定闰月重复'),
+                      subtitle: Text('农历${lunar.getMonthInChinese()}'
+                          '${lunar.getDayInChinese()}；指定闰月当年缺失时跳过'),
+                      trailing: M3ESwitch(
+                        value: _leapMonth,
+                        onChanged: (value) => setState(() => _leapMonth = value),
+                      ),
                     ),
                   ),
                   Text(

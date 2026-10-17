@@ -48,6 +48,15 @@ Widget _host(Widget child) => M3EMaterialApp(
 CountdownEvent? savedEvent;
 DayOverrideResult? savedOverride;
 
+/// 默认 800×600 的测试窗口装不下整个表单，保存按钮会落在屏幕外，
+/// 而 bottom sheet 里的滚动不是点击能依赖的东西（`ensureVisible` 在这里
+/// 不可靠，按钮永远在折叠线以下）。把视口调高，编辑器完整可见。
+void _useTallWindow(WidgetTester tester) {
+  tester.view.physicalSize = const Size(800, 2400);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.reset);
+}
+
 /// 把编辑器弹出来，参数与 app_shell 里的真实调用一致。
 ///
 /// 不能用 `MaterialPageRoute`：编辑器自己不是 Scaffold，Material 祖先由
@@ -58,6 +67,7 @@ Future<void> _openEventEditor(
   Future<String?> Function(String id)? pick,
 }) async {
   savedEvent = null;
+  _useTallWindow(tester);
   await tester.pumpWidget(
     _host(
       Builder(
@@ -92,6 +102,7 @@ Future<void> _openOverrideEditor(
   Future<String?> Function(String id)? pick,
 }) async {
   savedOverride = null;
+  _useTallWindow(tester);
   await tester.pumpWidget(
     _host(
       Builder(
@@ -123,7 +134,8 @@ Future<void> _openOverrideEditor(
   await tester.pumpAndSettle();
 }
 
-/// 先滚到按钮再点：表单比窗口高，封面区块与保存都在折叠线以下。
+/// 先确保目标在视野里再点。视口已调高，正常情况下 `ensureVisible` 什么都不用做；
+/// 留着它是为了内容以后变高（加了字段）时，测试仍能尽力够到按钮。
 Future<void> _tapAndSettle(WidgetTester tester, String label) async {
   await tester.ensureVisible(find.text(label));
   await tester.pumpAndSettle();
@@ -202,6 +214,22 @@ void main() {
 
       await _tapAndSettle(tester, '保存');
       expect(savedEvent!.coverPath, isNull);
+    });
+
+    testWidgets('切到农历重复会多出闰月开关，保存不受影响', (tester) async {
+      await _openEventEditor(tester, pick: (_) async => null);
+
+      // 这条 ListTile 的墨水曾被面板根的底色盖住（debug 断言），现在它
+      // 有自己的透明 Material：切过来只是多一个开关，不该有任何异常。
+      await _tapAndSettle(tester, '农历');
+      expect(find.text('按指定闰月重复'), findsOneWidget);
+
+      await tester.enterText(find.byType(TextFormField).first, '农历生日');
+      await _tapAndSettle(tester, '保存');
+
+      expect(savedEvent, isNotNull);
+      expect(savedEvent!.title, '农历生日');
+      expect(savedEvent!.recurrence, EventRecurrence.lunarYearly);
     });
 
     testWidgets('没接封面通道时不显示封面区块', (tester) async {

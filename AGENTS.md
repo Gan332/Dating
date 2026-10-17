@@ -138,7 +138,7 @@ flutter build appbundle --release --target-platform android-arm,android-arm64
 | `test/reminder_time_test.dart` | `reminderHour` 缺字段回落 9、null、越界夹取、浮点截断、`copyWith` 不变异性 |
 | `test/reminder_trigger_test.dart` | `reminderTrigger` 各提前量的触发时刻（跨月/跨年/闰日/0 点）、过去即不排；`notificationId` 稳定、错开、落在 32 位正整数范围 |
 | `test/important_days_page_test.dart` | **widget 测试**：搜索/分类筛选/两者叠加/再点取消、两种空态的区分与文案、清除筛选、分类管理面板（新增/重名挡下/删除二次确认/「其他」禁删） |
-| `test/editor_cover_test.dart` | **widget 测试**：两个编辑器的封面区块 —— 选择/更换/移除后的提交结果、取消不清旧图、新建记录选图与落库用同一个 id、未接封面通道时不显示区块 |
+| `test/editor_cover_test.dart` | **widget 测试**：两个编辑器的封面区块 —— 选择/更换/移除后的提交结果、取消不清旧图、新建记录选图与落库用同一个 id、未接封面通道时不显示区块、农历分支的闰月开关不再触发 ListTile 的 Material 断言 |
 | `test/holiday_data_test.dart` | 自建数据格式与公共接口（timor）格式解析、坏数据返回 null、覆盖/清除内置数据 |
 | `test/holiday_catalog_test.dart` | 2026 放假区间、补休日、未公布年份不推断、`latestYear` 不倒退（线上只剩更早年份时的回归守卫） |
 | `test/calendar_engine_test.dart` | `daysBetween` 方向与闰日、过去的一次性事件仍可见、2/29 在平年收敛到 2/28、农历新年下一次；`lunarFestivalsInRange` 窗口边界 `[from, from+days)`、去重、不可修改；`approachProgress` 的 null/0/1/半程/夹取/闰日/农历 |

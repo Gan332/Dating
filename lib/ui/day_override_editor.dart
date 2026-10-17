@@ -305,12 +305,19 @@ class _DayOverrideEditorState extends State<DayOverrideEditor> {
                 ),
               ],
               const SizedBox(height: 6),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                value: _hidden,
-                onChanged: (value) => setState(() => _hidden = value),
-                title: const Text('在列表里隐藏这条'),
-                subtitle: const Text('隐藏后可随时恢复默认'),
+              // 放进自己的 Material：面板根是带背景的 DecoratedBox，ListTile
+              // 的墨水会画到更外层 bottom sheet 的 Material 上、被面板底色盖掉，
+              // Flutter 在 debug 里会为此直接断言报警。包一层透明 Material，
+              // 墨水就画在这一层，看得见。
+              Material(
+                type: MaterialType.transparency,
+                child: SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _hidden,
+                  onChanged: (value) => setState(() => _hidden = value),
+                  title: const Text('在列表里隐藏这条'),
+                  subtitle: const Text('隐藏后可随时恢复默认'),
+                ),
               ),
               const SizedBox(height: 10),
               Row(
