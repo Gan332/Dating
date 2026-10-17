@@ -1,12 +1,10 @@
-import 'dart:io';
-
 import 'package:lunar/lunar.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../app_controller.dart';
 import '../core/calendar_engine.dart';
-import '../data/cover_store.dart';
 import '../models/countdown_event.dart';
+import 'cover_field.dart';
 import 'event_editor.dart' show formatHour;
 
 /// 一条重要日的详情页：倒数、里程碑、历次发生的时间线，以及编辑与删除入口。
@@ -124,7 +122,13 @@ class _EventDetailPageState extends State<EventDetailPage> {
         children: [
           // 有封面就摆在最上面：它是这条记录最直观的那一眼。
           if (item.coverPath case final String cover)
-            _CoverImage(store: widget.controller.coverStore, filename: cover),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: CoverImage(
+                store: widget.controller.coverStore,
+                filename: cover,
+              ),
+            ),
           _CountdownCard(item: item),
           const SizedBox(height: 16),
           _FactsCard(item: item, recurrenceLabel: recurrenceLabel),
@@ -427,62 +431,6 @@ class _TimelineCard extends StatelessWidget {
     );
   }
 }
-
-/// 详情页顶部的封面图。
-///
-/// 文件名来自记录，图片本身要异步去私有目录里找：找不到就整块不显示，而不是占一个
-/// 灰色空框——导入备份会把封面字段清空，系统也可能清理掉文件，那时「没有封面」是
-/// 事实，不是加载失败。
-class _CoverImage extends StatefulWidget {
-  const _CoverImage({required this.store, required this.filename});
-
-  final CoverStore store;
-  final String filename;
-
-  @override
-  State<_CoverImage> createState() => _CoverImageState();
-}
-
-class _CoverImageState extends State<_CoverImage> {
-  File? _file;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  @override
-  void didUpdateWidget(covariant _CoverImage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // 换了封面（记录里的文件名变了）要重新取，否则还显示上一张。
-    if (oldWidget.filename != widget.filename) _load();
-  }
-
-  Future<void> _load() async {
-    final file = await widget.store.resolve(widget.filename);
-    if (!mounted) return;
-    setState(() => _file = file);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final file = _file;
-    if (file == null) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(24),
-        child: AspectRatio(
-          aspectRatio: 16 / 9,
-          // 相册里的原图可能有几 MB，按显示宽度解码就够，别整张塞进内存。
-          child: Image.file(file, fit: BoxFit.cover, cacheWidth: 1080),
-        ),
-      ),
-    );
-  }
-}
-
 
 class _TimelineRow extends StatelessWidget {
   const _TimelineRow({required this.moment, required this.today});

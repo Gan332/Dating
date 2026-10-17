@@ -2,7 +2,9 @@ import 'package:flutter/services.dart';
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../data/cover_store.dart';
 import '../models/day_override.dart';
+import 'cover_field.dart';
 import 'event_editor.dart';
 
 /// 编辑内置条目（官方节假日 / 传统节日）的结果。
@@ -26,6 +28,9 @@ class DayOverrideEditor extends StatefulWidget {
     required this.overridden,
     this.categories,
     this.savedCategory = '重要日',
+    this.savedCoverPath,
+    this.coverStore,
+    this.onPickCover,
   });
 
   /// 内置条目的稳定标识。
@@ -49,6 +54,13 @@ class DayOverrideEditor extends StatefulWidget {
   /// 所以只有已经改过的条目才需要把它带进来继续显示。
   final String savedCategory;
 
+  /// 这条改动记录原本的封面文件名；没改过或没设过就是 null。
+  final String? savedCoverPath;
+
+  /// 封面存取通道与选图回调，由界面层从 [AppController] 转交；缺一不显示封面区块。
+  final CoverStore? coverStore;
+  final CoverPickCallback? onPickCover;
+
   @override
   State<DayOverrideEditor> createState() => _DayOverrideEditorState();
 }
@@ -63,6 +75,9 @@ class _DayOverrideEditorState extends State<DayOverrideEditor> {
   late final TextEditingController _customLeadController;
   late bool _hidden;
 
+  /// 当前表单上的封面文件名；语义同 `EventEditor._coverPath`。
+  late String? _coverPath;
+
   @override
   void initState() {
     super.initState();
@@ -70,6 +85,7 @@ class _DayOverrideEditorState extends State<DayOverrideEditor> {
     _noteController = TextEditingController();
     _date = widget.date;
     _category = widget.savedCategory;
+    _coverPath = widget.savedCoverPath;
     _reminderDays = -1;
     _reminderHour = 9;
     _hidden = false;
@@ -88,6 +104,8 @@ class _DayOverrideEditorState extends State<DayOverrideEditor> {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    final coverStore = widget.coverStore;
+    final onPickCover = widget.onPickCover;
     return Container(
       decoration: BoxDecoration(
         color: colors.surface,
@@ -274,6 +292,18 @@ class _DayOverrideEditorState extends State<DayOverrideEditor> {
                   border: OutlineInputBorder(),
                 ),
               ),
+              // 与事件编辑器同构：挑了图只改表单状态，跟着「保存改动」一起提交。
+              if (coverStore != null && onPickCover != null) ...[
+                const SizedBox(height: 16),
+                CoverField(
+                  store: coverStore,
+                  filename: _coverPath,
+                  // 内置条目没有记录 id，改动记录的 origin 就是它的稳定标识，
+                  // 封面文件名也用它命名，导入导出后仍与条目对得上。
+                  onPick: () => onPickCover(widget.origin),
+                  onChanged: (name) => setState(() => _coverPath = name),
+                ),
+              ],
               const SizedBox(height: 6),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
@@ -342,6 +372,7 @@ class _DayOverrideEditorState extends State<DayOverrideEditor> {
       reminderDays: _reminderDays,
       reminderHour: _reminderHour,
       hidden: _hidden,
+      coverPath: _coverPath,
     );
   }
 }
